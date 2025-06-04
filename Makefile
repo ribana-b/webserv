@@ -85,6 +85,8 @@ RESET := \033[0m
 # |                             Message Section                              | #
 # @--------------------------------------------------------------------------@ #
 
+SHELL       := /bin/bash
+
 COMPILE_MSG = @echo -e "🌊 🦔 $(T_BLUE)$(BOLD)Compiling $(T_WHITE)$<...$(RESET)"
 OBJ_MSG     = @echo -e "✅ 🦔 $(T_PINK)$(BOLD)$(NAME) $(T_YELLOW)Objects $(RESET)$(T_GREEN)created successfully!$(RESET)"
 OUTPUT_MSG  = @echo -e "✅ 🦔 $(T_PINK)$(BOLD)$(NAME) $(RESET)$(T_GREEN)created successfully!$(RESET)"
