@@ -10,12 +10,12 @@
 /*                                                                            */
 /* ************************************************************************** */
 
-#include "webserv.hpp"
 #include <iostream>
 
-int	main(void)
-{
-	std::cout << "Hello webserv" << std::endl;
+#include "webserv.hpp"
 
-	return (0);
+int main(void) {
+    std::cout << "Hello webserv" << std::endl;
+
+    return (0);
 }

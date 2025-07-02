@@ -13,6 +13,7 @@ INCLUDE_FILES := webserv.hpp\
 SRC_FILES     := main.cpp\
 
 SRC := $(addprefix $(SRC_DIR), $(SRC_FILES))
+INCLUDE := $(addprefix $(INCLUDE_DIR), $(INCLUDE_FILES))
 
 VPATH := $(SRC_DIR)\
 
@@ -45,7 +46,31 @@ re:
 quiet:
 	@$(MAKE) -s QUIET=1
 
-.PHONY: all clean fclean re quiet
+apply-format:
+	clang-format -i $(SRC) $(INCLUDE)
+
+format:
+	@status=0; \
+	for f in $(SRC) $(INCLUDE); do \
+		echo "Running clang-format on $$f"; \
+		if ! clang-format --dry-run --Werror $$f; then \
+			status=1; \
+		fi; \
+	done; \
+	exit $$status
+
+tidy:
+	@status=0; \
+	for f in $(SRC); do \
+		echo "Running clang-tidy on $$f"; \
+		if ! clang-tidy $$f -- -std=c++98 $(CPPFLAGS); then \
+			echo "clang-tidy failed for $$f"; \
+			status=1; \
+		fi; \
+	done; \
+	exit $$status
+
+.PHONY: all clean fclean re quiet format tidy apply-format
 
 $(NAME): $(OBJ)
 	$(OBJ_MSG)

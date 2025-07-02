@@ -1,0 +1,16 @@
+Checks: >
+  -*,
+  clang-analyzer-*,
+  bugprone-*,
+  readability-*,
+  misc-include-cleaner,
+
+WarningsAsErrors: true
+HeaderFilterRegex: '.*'
+FormatStyle: none
+
+CheckOptions:
+  - key:   readability-identifier-naming.FunctionCase
+    value: camelBack
+  - key:   readability-identifier-naming.VariableCase
+    value: camelBack
