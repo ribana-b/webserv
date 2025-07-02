@@ -5,8 +5,6 @@ Checks: >
   readability-*,
   misc-include-cleaner,
 
-WarningsAsErrors: true
-HeaderFilterRegex: '.*'
 FormatStyle: none
 
 CheckOptions:

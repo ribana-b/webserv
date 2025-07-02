@@ -26,7 +26,7 @@ jobs:
     - name: Verify everything is formatted properly
       run: make format
 
-    - name: Verify 
+    - name: Verify everything is linted properly
       run: make tidy
 
     - name: Verify everything compiles

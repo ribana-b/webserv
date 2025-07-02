@@ -63,8 +63,7 @@ tidy:
 	@status=0; \
 	for f in $(SRC); do \
 		echo "Running clang-tidy on $$f"; \
-		if ! clang-tidy $$f -- -std=c++98 $(CPPFLAGS); then \
-			echo "clang-tidy failed for $$f"; \
+		if ! clang-tidy --warnings-as-errors=* -header-filter=.* $$f -- -std=c++98 $(CPPFLAGS); then \
 			status=1; \
 		fi; \
 	done; \
