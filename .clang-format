@@ -1,14 +1,5 @@
 BasedOnStyle: Google
 
-AlignConsecutiveAssignments:
-  Enabled:                   true
-  AcrossEmptyLines:          false
-  AcrossComments:            false
-  AlignCompound:             true
-  AlignFunctionDeclarations: true
-  AlignFunctionPointers:     true
-  PadOperators:              true
-
 BreakConstructorInitializers: AfterColon
 BreakInheritanceList:         AfterColon
 
@@ -17,9 +8,4 @@ ColumnLimit: 100
 IndentAccessModifiers: true
 IndentWidth:           4
 
-InsertBraces:       true
-InsertNewlineAtEOF: true
-
 NamespaceIndentation: All
-
-RemoveEmptyLinesInUnwrappedLines: true
