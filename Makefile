@@ -9,8 +9,12 @@ SRC_DIR     := src/
 OBJ_DIR     := obj/
 
 INCLUDE_FILES := webserv.hpp\
+				 monitor.hpp\
 
 SRC_FILES     := main.cpp\
+				 monitor.cpp\
+				 monitorInit.cpp\
+				 monitorEvent.cpp\
 
 SRC := $(addprefix $(SRC_DIR), $(SRC_FILES))
 INCLUDE := $(addprefix $(INCLUDE_DIR), $(INCLUDE_FILES))
