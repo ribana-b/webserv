@@ -1,11 +1,13 @@
 BasedOnStyle: Google
 
+AccessModifierOffset: -4
+
 BreakConstructorInitializers: AfterColon
 BreakInheritanceList:         AfterColon
 
 ColumnLimit: 100
 
-IndentAccessModifiers: true
+IndentAccessModifiers: false
 IndentWidth:           4
 
 NamespaceIndentation: All
