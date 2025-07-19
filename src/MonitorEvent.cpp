@@ -77,8 +77,8 @@ Monitor::ExecResult Monitor::eventExecConnection(const int fdesc, int &ready) {
 }
 
 Monitor::ExecResult Monitor::eventExecRequest(const int fdesc, int &ready) {
-    ssize_t bytesRead = 1;
-    char buffer[BUFFER_SIZE + 1];
+    ssize_t     bytesRead = 1;
+    char        buffer[BUFFER_SIZE + 1];
     std::string request;
 
     while (bytesRead != 0) {
