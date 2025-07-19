@@ -29,36 +29,36 @@
 struct pollfd;
 
 class Monitor {
-    private:
-        struct pollfd *fds;
-        int *listenFds;
-        int listenCount;
-        int fdCount;
-        int maxFd;
+private:
+    struct pollfd *fds;
+    int           *listenFds;
+    int            listenCount;
+    int            fdCount;
+    int            maxFd;
 
-        enum InitResult { INIT_SUCCESS, INIT_MEMORY_ERROR, INIT_LISTEN_ERROR };
+    enum InitResult { INIT_SUCCESS, INIT_MEMORY_ERROR, INIT_LISTEN_ERROR };
 
-        enum ExecResult { EXEC_SUCCESS, EXEC_CONNECTION_ERROR, EXEC_FATAL_ERROR };
+    enum ExecResult { EXEC_SUCCESS, EXEC_CONNECTION_ERROR, EXEC_FATAL_ERROR };
 
-        void addPollFd(int fdesc);
-        void closePollFd(int fdesc);
-        void cleanPollFds();
-        int isPollFd(int fdesc) const;
-        int isListenFd(int fdesc) const;
-        InitResult initData(char **ports, int n);
-        static int initListenFd(struct sockaddr_in &address);
-        int eventInit(int ready);
-        int eventExec(int fdesc, int &ready);
-        ExecResult eventExecType(int fdesc, int &ready);
-        ExecResult eventExecConnection(int fdesc, int &ready);
-        ExecResult eventExecRequest(int fdesc, int &ready);
+    void       addPollFd(int fdesc);
+    void       closePollFd(int fdesc);
+    void       cleanPollFds();
+    int        isPollFd(int fdesc) const;
+    int        isListenFd(int fdesc) const;
+    InitResult initData(char **ports, int n);
+    static int initListenFd(struct sockaddr_in &address);
+    int        eventInit(int ready);
+    int        eventExec(int fdesc, int &ready);
+    ExecResult eventExecType(int fdesc, int &ready);
+    ExecResult eventExecConnection(int fdesc, int &ready);
+    ExecResult eventExecRequest(int fdesc, int &ready);
 
-    public:
-        Monitor();
-        ~Monitor();
+public:
+    Monitor();
+    ~Monitor();
 
-        int init(char **ports, int n);
-        void beginLoop();
+    int  init(char **ports, int n);
+    void beginLoop();
 };
 
 /* @------------------------------------------------------------------------@ */

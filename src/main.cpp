@@ -6,14 +6,17 @@
 /*   By: ribana-b <ribana-b@student.42malaga.com>   +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/06/02 11:42:05 by ribana-b          #+#    #+# Malaga      */
-/*   Updated: 2025/07/16 19:18:04 by disantam         ###   ########.fr       */
+/*   Updated: 2025/07/18 10:38:39 by ribana-b         ###   ########.com      */
 /*                                                                            */
 /* ************************************************************************** */
 
+#include <fstream>
 #include <iostream>
+#include <string>
 
+#include "Config.hpp"
+#include "Logger.hpp"
 #include "Monitor.hpp"
-#include "Webserv.hpp"
 
 int execMonitor(char **argv, int argc) {
     Monitor monitor;
@@ -29,7 +32,25 @@ int main(int argc, char *argv[]) {
     if (argc < 2) {
         return 1;
     }
+
+    std::ofstream file("webserv.log", std::ios::app);
+    if (!file) {
+        return (1);
+    }
+    Logger logger(file);
+    Config config(logger);
+    Config config2;
+
+    if (argc == 2) {
+        config.load(argv[1]);
+        config2.load(argv[1]);
+    } else {
+        config.load();
+        config2.load();
+    }
+    file.close();
+
     execMonitor(argv, argc);
-    std::cout << "Hello webserv" << std::endl;
+
     return (0);
 }
