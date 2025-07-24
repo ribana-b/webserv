@@ -12,3 +12,9 @@ CheckOptions:
     value: camelBack
   - key:   readability-identifier-naming.VariableCase
     value: camelBack
+  - key:   readability-identifier-length.MinimumVariableNameLength
+    value: 1
+  - key:   readability-identifier-length.MinimumParameterNameLength
+    value: 1
+  - key:   readability-identifier-length.MinimumLoopCounterNameLength
+    value: 1
