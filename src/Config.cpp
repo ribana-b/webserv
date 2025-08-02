@@ -6,15 +6,16 @@
 /*   By: ribana-b <ribana-b@student.42malaga.com>   +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/07/05 21:51:15 by ribana-b          #+#    #+# Malaga      */
-/*   Updated: 2025/08/02 18:59:41 by ribana-b         ###   ########.com      */
+/*   Updated: 2025/08/02 20:12:29 by ribana-b         ###   ########.com      */
 /*                                                                            */
 /* ************************************************************************** */
 
 #include "Config.hpp"
 
-#include <arpa/inet.h>  // For htonl
-#include <stdint.h>     // For int types
-#include <sys/stat.h>   // For stat
+#include <arpa/inet.h>   // For htonl, htons
+#include <netinet/in.h>  // For INADDR_ANY
+#include <stdint.h>      // For int types
+#include <sys/stat.h>    // For stat
 
 #include <cstdlib>   // For std::atoi
 #include <fstream>   // For std::ifstream
@@ -88,15 +89,16 @@ Config::Listen Config::parseListen(const std::string& value) {
     std::size_t colonPos = value.find(":");
     if (colonPos == std::string::npos) {
         uint16_t port = static_cast<uint16_t>(std::atoi(value.c_str()));
-        return Listen(0, port);
+        uint32_t ip = INADDR_ANY;
+        return Listen(htonl(ip), htons(port));
     }
 
     std::string ipStr = value.substr(0, colonPos);
     std::string portStr = value.substr(colonPos + 1);
-    uint32_t    ip = htonl(octetsToIp(getOctets(ipStr)));
-    uint16_t    port = static_cast<uint16_t>(std::atoi(portStr.c_str()));
+    uint32_t    ip = octetsToIp(getOctets(ipStr));
+    uint16_t    port = std::atoi(portStr.c_str());
 
-    return (Listen(ip, port));
+    return Listen(htonl(ip), htons(port));
 }
 
 static std::string getValue(std::istringstream& iss) {
