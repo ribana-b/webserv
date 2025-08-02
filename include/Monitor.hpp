@@ -1,12 +1,12 @@
 /* ************************************************************************** */
 /*                                                                            */
 /*                                                        :::      ::::::::   */
-/*   monitor.hpp                                        :+:      :+:    :+:   */
+/*   Monitor.hpp                                        :+:      :+:    :+:   */
 /*                                                    +:+ +:+         +:+     */
 /*   By: disantam <disantam@student.42malaga.com>   +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/07/15 13:37:28 by disantam          #+#    #+#             */
-/*   Updated: 2025/07/16 17:56:34 by disantam         ###   ########.fr       */
+/*   Updated: 2025/08/02 20:46:26 by ribana-b         ###   ########.com      */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -22,6 +22,11 @@
 /* |                            Include Section                             | */
 /* @------------------------------------------------------------------------@ */
 
+#include <vector>  // For std::vector
+
+#include "Config.hpp"
+#include "Logger.hpp"
+
 /* @------------------------------------------------------------------------@ */
 /* |                             Class Section                              | */
 /* @------------------------------------------------------------------------@ */
@@ -30,6 +35,7 @@ struct pollfd;
 
 class Monitor {
 private:
+    Logger         logger;
     struct pollfd *fds;
     int           *listenFds;
     int            listenCount;
@@ -45,7 +51,7 @@ private:
     void       cleanPollFds();
     int        isPollFd(int fdesc) const;
     int        isListenFd(int fdesc) const;
-    InitResult initData(char **ports, int n);
+    InitResult initData(std::vector<Config::Server> servers);
     static int initListenFd(struct sockaddr_in &address);
     int        eventInit(int ready);
     int        eventExec(int fdesc, int &ready);
@@ -54,10 +60,11 @@ private:
     ExecResult eventExecRequest(int fdesc, int &ready);
 
 public:
+    Monitor(const Logger &logger);
     Monitor();
     ~Monitor();
 
-    int  init(char **ports, int n);
+    int  init(std::vector<Config::Server> servers);
     void beginLoop();
 };
 

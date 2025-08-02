@@ -6,7 +6,7 @@
 /*   By: disantam <disantam@student.42malaga.com>   +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/07/15 13:51:46 by disantam          #+#    #+#             */
-/*   Updated: 2025/07/16 19:18:48 by disantam         ###   ########.fr       */
+/*   Updated: 2025/08/02 20:46:21 by ribana-b         ###   ########.com      */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -23,6 +23,14 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+
+Monitor::Monitor(const Logger& newLogger) : logger(newLogger) {
+    this->fds = NULL;
+    this->listenFds = NULL;
+    this->listenCount = 0;
+    this->fdCount = 0;
+    this->maxFd = 0;
+}
 
 Monitor::Monitor() {
     this->fds = NULL;
