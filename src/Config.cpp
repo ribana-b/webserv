@@ -6,7 +6,7 @@
 /*   By: ribana-b <ribana-b@student.42malaga.com>   +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/07/05 21:51:15 by ribana-b          #+#    #+# Malaga      */
-/*   Updated: 2025/08/02 20:12:29 by ribana-b         ###   ########.com      */
+/*   Updated: 2025/08/02 20:19:08 by ribana-b         ###   ########.com      */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -154,27 +154,27 @@ void Config::parseLine(const std::string& line) {  // NOLINT
 
     if (key == "server" || key == "{") {
         if (key == "server") {
-            m_Logger.info() << "server context opened";
+            m_Logger.debug() << "server context opened";
         }
         return;
     }
 
     if (key == "}") {
         if (inLocation) {
-            m_Logger.info() << "location context closed";
+            m_Logger.debug() << "location context closed";
             server.locations.push_back(currentLocation);
             currentLocation = Location();
             inLocation = false;
         } else {
-            m_Logger.info() << "server context closed";
+            m_Logger.debug() << "server context closed";
             m_Servers.push_back(server);
             server = Server();
         }
     } else if (key == "listen") {
-        m_Logger.info() << "listen rule";
+        m_Logger.debug() << "listen rule";
         server.listens.push_back(parseListen(getValue(iss)));
     } else if (key == "root") {
-        m_Logger.info() << "root rule";
+        m_Logger.debug() << "root rule";
         std::string root = getValue(iss);
         if (inLocation) {
             currentLocation.root = root;
@@ -182,18 +182,18 @@ void Config::parseLine(const std::string& line) {  // NOLINT
             server.root = root;
         }
     } else if (key == "error_page") {
-        m_Logger.info() << "error_page rule";
+        m_Logger.debug() << "error_page rule";
         int errorCode;
         iss >> errorCode;
         server.errorPages[errorCode] = getValue(iss);
     } else if (key == "location") {
-        m_Logger.info() << "location context opened";
+        m_Logger.debug() << "location context opened";
         inLocation = true;
         std::string path;
         iss >> path;
         currentLocation.path = path;
     } else if (key == "index") {
-        m_Logger.info() << "index rule";
+        m_Logger.debug() << "index rule";
         std::vector<std::string> index = getValues(iss);
         if (inLocation) {
             currentLocation.index = index;
@@ -201,7 +201,7 @@ void Config::parseLine(const std::string& line) {  // NOLINT
             server.index = index;
         }
     } else if (key == "autoindex") {
-        m_Logger.info() << "autoindex rule";
+        m_Logger.debug() << "autoindex rule";
         std::string value = getValue(iss);
         if (value == "on") {
             currentLocation.autoindex = true;
@@ -211,13 +211,13 @@ void Config::parseLine(const std::string& line) {  // NOLINT
             throw(std::exception());  // TODO(srvariable): InvalidValueException
         }
     } else if (key == "allow_methods") {
-        m_Logger.info() << "allow_methods rule";
+        m_Logger.debug() << "allow_methods rule";
         std::vector<std::string> values = getValues(iss);
         for (std::size_t i = 0; i < values.size(); ++i) {
             currentLocation.allowMethods.insert(values[i]);
         }
     } else if (key == "client_max_body_size") {
-        m_Logger.info() << "client_max_body_size rule";
+        m_Logger.debug() << "client_max_body_size rule";
         currentLocation.clientMaxBodySize = parseClientMaxBodySize(getValue(iss));
     } else {
         m_Logger.warn() << "unknown rule/context: " << key;
@@ -260,9 +260,9 @@ bool Config::load(const std::string& configFilename) {
         m_Logger.error() << "Couldn't open '" << configFilename << "'";
         return (false);
     }
+    m_Logger.info() << "Parsing '" << configFilename << "'";
 
     std::string line;
-
     while (getline(file, line).good()) {
         removeComments(line);
         trim(line);
