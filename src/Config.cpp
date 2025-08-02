@@ -282,6 +282,4 @@ bool Config::load(const std::string& configFilename) {
 
 bool Config::load() { return (load(Config::defaultConfigFilename)); }
 
-std::vector<Config::Server> Config::getServers() const {
-    return (m_Servers);
-}
+std::vector<Config::Server> Config::getServers() const { return (m_Servers); }
