@@ -6,7 +6,7 @@
 /*   By: disantam <disantam@student.42malaga.com>   +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/07/16 15:51:32 by disantam          #+#    #+#             */
-/*   Updated: 2025/08/02 20:48:54 by ribana-b         ###   ########.com      */
+/*   Updated: 2025/08/02 21:14:10 by ribana-b         ###   ########.com      */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -52,18 +52,21 @@ Monitor::InitResult Monitor::initData(std::vector<Config::Server> servers) {
     if (this->listenFds == NULL) {
         return INIT_MEMORY_ERROR;
     }
+
+    n = 0;
     for (std::size_t i = 0; i < servers.size(); ++i) {
         for (std::size_t j = 0; j < servers[i].listens.size(); ++j) {
             memset(&address, 0, sizeof(address));
             address.sin_family = AF_INET;
             address.sin_addr.s_addr = servers[i].listens[j].first;
             address.sin_port = servers[i].listens[j].second;
-            listenFds[i + j] = Monitor::initListenFd(address);
-            if (listenFds[i + j] < 0) {
+            listenFds[n] = Monitor::initListenFd(address);
+            if (listenFds[n] < 0) {
                 return INIT_LISTEN_ERROR;
             }
 
             logger.info() << "Listening to " << address.sin_addr.s_addr << ":" << address.sin_port;
+            ++n;
         }
     }
     this->listenCount = n;
