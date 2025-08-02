@@ -6,7 +6,7 @@
 /*   By: ribana-b <ribana-b@student.42malaga.com>   +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/07/05 21:50:25 by ribana-b          #+#    #+# Malaga      */
-/*   Updated: 2025/08/02 19:02:30 by ribana-b         ###   ########.com      */
+/*   Updated: 2025/08/02 21:55:39 by ribana-b         ###   ########.com      */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -61,9 +61,22 @@ private:
     Logger              m_Logger;
     std::vector<Server> m_Servers;
 
+    void handleClosedContext(Server& server, Location& currentLocation, bool& inLocation);
+    void handleListen(Server& server, std::istringstream& iss);
+    void handleRoot(Server& server, Location& currentLocation, bool& inLocation,
+                    std::istringstream& iss);
+    void handleErrorPage(Server& server, std::istringstream& iss);
+    void handleLocation(Location& currentLocation, bool& inLocation, std::istringstream& iss);
+    void handleIndex(Server& server, Location& currentLocation, bool& inLocation,
+                     std::istringstream& iss);
+    void handleAutoindex(Location& currentLocation, std::istringstream& iss);
+    void handleAllowMethods(Location& currentLocation, std::istringstream& iss);
+    void handleClientMaxBodySize(Location& currentLocation, std::istringstream& iss);
+
     static Listen      parseListen(const std::string& value);
     static std::size_t parseClientMaxBodySize(const std::string& value);
-    void               parseLine(const std::string& line);
+    void               parseLine(const std::string& line, Server& server, Location& currentLocation,
+                                 bool& inLocation);
 };
 
 #endif

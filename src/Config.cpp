@@ -6,7 +6,7 @@
 /*   By: ribana-b <ribana-b@student.42malaga.com>   +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/07/05 21:51:15 by ribana-b          #+#    #+# Malaga      */
-/*   Updated: 2025/08/02 20:19:08 by ribana-b         ###   ########.com      */
+/*   Updated: 2025/08/02 22:00:29 by ribana-b         ###   ########.com      */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -20,6 +20,7 @@
 #include <cstdlib>   // For std::atoi
 #include <fstream>   // For std::ifstream
 #include <iostream>  // For std::cout
+#include <sstream>   // For std::istringstream
 #include <string>    // For std::string, getline, std::string::npos
 #include <vector>    // For std::vector
 
@@ -142,12 +143,89 @@ std::size_t Config::parseClientMaxBodySize(const std::string& value) {
     return (size);
 }
 
-// TODO(srvariable): Test with invalid configs
-void Config::parseLine(const std::string& line) {  // NOLINT
-    static Server   server;
-    static Location currentLocation;
-    static bool     inLocation = false;
+void Config::handleClosedContext(Server& server, Location& currentLocation, bool& inLocation) {
+    if (inLocation) {
+        m_Logger.debug() << "location context closed";
+        server.locations.push_back(currentLocation);
+        currentLocation = Location();
+        inLocation = false;
+    } else {
+        m_Logger.debug() << "server context closed";
+        m_Servers.push_back(server);
+        server = Server();
+    }
+}
 
+void Config::handleListen(Server& server, std::istringstream& iss) {
+    m_Logger.debug() << "listen directive";
+    server.listens.push_back(parseListen(getValue(iss)));
+}
+
+void Config::handleRoot(Server& server, Location& currentLocation, bool& inLocation,
+                        std::istringstream& iss) {
+    m_Logger.debug() << "root directive";
+    std::string root = getValue(iss);
+    if (inLocation) {
+        currentLocation.root = root;
+    } else {
+        server.root = root;
+    }
+}
+
+void Config::handleErrorPage(Server& server, std::istringstream& iss) {
+    m_Logger.debug() << "error_page directive";
+    int errorCode;
+    iss >> errorCode;
+    server.errorPages[errorCode] = getValue(iss);
+}
+
+void Config::handleLocation(Location& currentLocation, bool& inLocation, std::istringstream& iss) {
+    m_Logger.debug() << "location context opened";
+    inLocation = true;
+    std::string path;
+    iss >> path;
+    currentLocation.path = path;
+}
+
+void Config::handleIndex(Server& server, Location& currentLocation, bool& inLocation,
+                         std::istringstream& iss) {
+    m_Logger.debug() << "index directive";
+    std::vector<std::string> index = getValues(iss);
+    if (inLocation) {
+        currentLocation.index = index;
+    } else {
+        server.index = index;
+    }
+}
+
+void Config::handleAutoindex(Location& currentLocation, std::istringstream& iss) {
+    m_Logger.debug() << "autoindex directive";
+    std::string value = getValue(iss);
+    if (value == "on") {
+        currentLocation.autoindex = true;
+    } else if (value == "off") {
+        currentLocation.autoindex = false;
+    } else {
+        throw(std::exception());  // TODO(srvariable): InvalidValueException
+    }
+}
+
+void Config::handleAllowMethods(Location& currentLocation, std::istringstream& iss) {
+    m_Logger.debug() << "allow_methods directive";
+    std::vector<std::string> values = getValues(iss);
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        currentLocation.allowMethods.insert(values[i]);
+    }
+}
+
+void Config::handleClientMaxBodySize(Location& currentLocation, std::istringstream& iss) {
+    m_Logger.debug() << "client_max_body_size directive";
+    currentLocation.clientMaxBodySize = parseClientMaxBodySize(getValue(iss));
+}
+
+// TODO(srvariable): Test with invalid configs
+void Config::parseLine(const std::string& line, Server& server, Location& currentLocation,
+                       bool& inLocation) {
     std::istringstream iss(line);
     std::string        key;
     iss >> key;
@@ -160,67 +238,25 @@ void Config::parseLine(const std::string& line) {  // NOLINT
     }
 
     if (key == "}") {
-        if (inLocation) {
-            m_Logger.debug() << "location context closed";
-            server.locations.push_back(currentLocation);
-            currentLocation = Location();
-            inLocation = false;
-        } else {
-            m_Logger.debug() << "server context closed";
-            m_Servers.push_back(server);
-            server = Server();
-        }
+        handleClosedContext(server, currentLocation, inLocation);
     } else if (key == "listen") {
-        m_Logger.debug() << "listen rule";
-        server.listens.push_back(parseListen(getValue(iss)));
+        handleListen(server, iss);
     } else if (key == "root") {
-        m_Logger.debug() << "root rule";
-        std::string root = getValue(iss);
-        if (inLocation) {
-            currentLocation.root = root;
-        } else {
-            server.root = root;
-        }
+        handleRoot(server, currentLocation, inLocation, iss);
     } else if (key == "error_page") {
-        m_Logger.debug() << "error_page rule";
-        int errorCode;
-        iss >> errorCode;
-        server.errorPages[errorCode] = getValue(iss);
+        handleErrorPage(server, iss);
     } else if (key == "location") {
-        m_Logger.debug() << "location context opened";
-        inLocation = true;
-        std::string path;
-        iss >> path;
-        currentLocation.path = path;
+        handleLocation(currentLocation, inLocation, iss);
     } else if (key == "index") {
-        m_Logger.debug() << "index rule";
-        std::vector<std::string> index = getValues(iss);
-        if (inLocation) {
-            currentLocation.index = index;
-        } else {
-            server.index = index;
-        }
+        handleIndex(server, currentLocation, inLocation, iss);
     } else if (key == "autoindex") {
-        m_Logger.debug() << "autoindex rule";
-        std::string value = getValue(iss);
-        if (value == "on") {
-            currentLocation.autoindex = true;
-        } else if (value == "off") {
-            currentLocation.autoindex = false;
-        } else {
-            throw(std::exception());  // TODO(srvariable): InvalidValueException
-        }
+        handleAutoindex(currentLocation, iss);
     } else if (key == "allow_methods") {
-        m_Logger.debug() << "allow_methods rule";
-        std::vector<std::string> values = getValues(iss);
-        for (std::size_t i = 0; i < values.size(); ++i) {
-            currentLocation.allowMethods.insert(values[i]);
-        }
+        handleAllowMethods(currentLocation, iss);
     } else if (key == "client_max_body_size") {
-        m_Logger.debug() << "client_max_body_size rule";
-        currentLocation.clientMaxBodySize = parseClientMaxBodySize(getValue(iss));
+        handleClientMaxBodySize(currentLocation, iss);
     } else {
-        m_Logger.warn() << "unknown rule/context: " << key;
+        m_Logger.warn() << "unknown context/directive: " << key;
     }
 }
 
@@ -262,6 +298,9 @@ bool Config::load(const std::string& configFilename) {
     }
     m_Logger.info() << "Parsing '" << configFilename << "'";
 
+    Server      server;
+    Location    currentLocation;
+    bool        inLocation = false;
     std::string line;
     while (getline(file, line).good()) {
         removeComments(line);
@@ -271,7 +310,7 @@ bool Config::load(const std::string& configFilename) {
         }
 
         try {
-            parseLine(line);
+            parseLine(line, server, currentLocation, inLocation);
         } catch (const std::exception& e) {
             m_Logger.error() << e.what();
             return (false);
