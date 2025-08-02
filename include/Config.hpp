@@ -6,7 +6,7 @@
 /*   By: ribana-b <ribana-b@student.42malaga.com>   +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/07/05 21:50:25 by ribana-b          #+#    #+# Malaga      */
-/*   Updated: 2025/08/02 17:30:59 by ribana-b         ###   ########.com      */
+/*   Updated: 2025/08/02 19:02:30 by ribana-b         ###   ########.com      */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -25,16 +25,6 @@
 
 class Config {
 public:
-    Config(const Logger& logger);
-    Config();
-    ~Config();
-    Config(const Config& that);
-    Config& operator=(const Config& that);
-
-    bool load(const std::string& configFilename);
-    bool load();
-
-private:
     typedef std::pair<uint32_t, uint16_t> Listen;
 
     struct Location {
@@ -54,6 +44,18 @@ private:
         std::map<int, std::string> errorPages;
     };
 
+    Config(const Logger& logger);
+    Config();
+    ~Config();
+    Config(const Config& that);
+    Config& operator=(const Config& that);
+
+    bool load(const std::string& configFilename);
+    bool load();
+
+    std::vector<Server> getServers() const;
+
+private:
     static const std::string defaultConfigFilename;
 
     Logger              m_Logger;

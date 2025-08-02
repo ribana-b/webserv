@@ -6,7 +6,7 @@
 /*   By: ribana-b <ribana-b@student.42malaga.com>   +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/07/05 21:51:15 by ribana-b          #+#    #+# Malaga      */
-/*   Updated: 2025/08/02 17:54:42 by ribana-b         ###   ########.com      */
+/*   Updated: 2025/08/02 18:59:41 by ribana-b         ###   ########.com      */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -20,6 +20,7 @@
 #include <fstream>   // For std::ifstream
 #include <iostream>  // For std::cout
 #include <string>    // For std::string, getline, std::string::npos
+#include <vector>    // For std::vector
 
 #include "Logger.hpp"
 
@@ -169,7 +170,6 @@ void Config::parseLine(const std::string& line) {  // NOLINT
         }
     } else if (key == "listen") {
         m_Logger.info() << "listen rule";
-        Listen listen;
         server.listens.push_back(parseListen(getValue(iss)));
     } else if (key == "root") {
         m_Logger.info() << "root rule";
@@ -281,3 +281,7 @@ bool Config::load(const std::string& configFilename) {
 }
 
 bool Config::load() { return (load(Config::defaultConfigFilename)); }
+
+std::vector<Config::Server> Config::getServers() const {
+    return (m_Servers);
+}
