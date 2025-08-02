@@ -6,7 +6,7 @@
 /*   By: ribana-b <ribana-b@student.42malaga.com>   +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/06/02 11:42:05 by ribana-b          #+#    #+# Malaga      */
-/*   Updated: 2025/07/18 10:38:39 by ribana-b         ###   ########.com      */
+/*   Updated: 2025/08/02 18:02:29 by ribana-b         ###   ########.com      */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -37,16 +37,20 @@ int main(int argc, char *argv[]) {
     if (!file) {
         return (1);
     }
-    Logger logger(file);
+    const bool enableColour = true;
+    Logger     logger(
+            std::cout,
+            enableColour);  // NOTE(srvariable): Using std::cout instead of file to have colours
     Config config(logger);
-    Config config2;
 
     if (argc == 2) {
-        config.load(argv[1]);
-        config2.load(argv[1]);
+        if (!config.load(argv[1])) {
+            return (1);
+        }
     } else {
-        config.load();
-        config2.load();
+        if (!config.load()) {
+            return (1);
+        }
     }
     file.close();
 

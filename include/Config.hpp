@@ -6,7 +6,7 @@
 /*   By: ribana-b <ribana-b@student.42malaga.com>   +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/07/05 21:50:25 by ribana-b          #+#    #+# Malaga      */
-/*   Updated: 2025/07/19 20:41:46 by ribana-b         ###   ########.com      */
+/*   Updated: 2025/08/02 17:30:59 by ribana-b         ###   ########.com      */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -36,19 +36,19 @@ public:
 
 private:
     typedef std::pair<uint32_t, uint16_t> Listen;
+
     struct Location {
-        std::string           path;
-        std::string           root;
-        std::string           index;
-        bool                  autoindex;
-        std::set<std::string> allowMethods;
-        std::size_t           clientMaxBodySize;
+        std::string              path;
+        std::string              root;
+        std::vector<std::string> index;
+        bool                     autoindex;
+        std::set<std::string>    allowMethods;
+        std::size_t              clientMaxBodySize;
     };
 
     struct Server {
-        std::string                path;
         std::string                root;
-        std::string                index;
+        std::vector<std::string>   index;
         std::vector<Listen>        listens;
         std::vector<Location>      locations;
         std::map<int, std::string> errorPages;
@@ -57,7 +57,11 @@ private:
     static const std::string defaultConfigFilename;
 
     Logger              m_Logger;
-    std::vector<Server> servers;
+    std::vector<Server> m_Servers;
+
+    static Listen      parseListen(const std::string& value);
+    static std::size_t parseClientMaxBodySize(const std::string& value);
+    void               parseLine(const std::string& line);
 };
 
 #endif
