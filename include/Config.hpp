@@ -6,7 +6,7 @@
 /*   By: ribana-b <ribana-b@student.42malaga.com>   +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/07/05 21:50:25 by ribana-b          #+#    #+# Malaga      */
-/*   Updated: 2025/08/02 21:55:39 by ribana-b         ###   ########.com      */
+/*   Updated: 2025/08/05 16:25:24 by ribana-b         ###   ########.com      */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -51,7 +51,7 @@ public:
     Config& operator=(const Config& that);
 
     bool load(const std::string& configFilename);
-    bool load();
+    bool load(const char* programName);
 
     std::vector<Server> getServers() const;
 
@@ -60,6 +60,8 @@ private:
 
     Logger              m_Logger;
     std::vector<Server> m_Servers;
+
+    static std::string searchConfigFile(const char* programName);
 
     void handleClosedContext(Server& server, Location& currentLocation, bool& inLocation);
     void handleListen(Server& server, std::istringstream& iss);

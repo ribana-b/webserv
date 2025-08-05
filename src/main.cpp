@@ -6,13 +6,14 @@
 /*   By: ribana-b <ribana-b@student.42malaga.com>   +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/06/02 11:42:05 by ribana-b          #+#    #+# Malaga      */
-/*   Updated: 2025/08/02 20:50:17 by ribana-b         ###   ########.com      */
+/*   Updated: 2025/08/05 16:36:29 by ribana-b         ###   ########.com      */
 /*                                                                            */
 /* ************************************************************************** */
 
 #include <fstream>   // For std::ofstream
 #include <iostream>  // For std::cout, std::ios::app
 #include <vector>    // For std::vector
+#include <string>    // For std::string
 
 #include "Config.hpp"
 #include "Logger.hpp"
@@ -29,7 +30,9 @@ static int execMonitor(std::vector<Config::Server> servers, Logger& logger) {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc < 2) {
+    if (argc > 2) {
+        std::cerr << "\033[31m[ERROR]\033[0m " << "Usage: " << argv[0] << " [CONFIG_FILE]"
+                  << std::endl;
         return (1);
     }
 
@@ -39,16 +42,18 @@ int main(int argc, char* argv[]) {
     }
     const bool enableColour = true;
     Logger     logger(
-            std::cout,
-            enableColour);  // NOTE(srvariable): Using std::cout instead of file to have colours
+        std::cout,
+        enableColour);  // NOTE(srvariable): Using std::cout instead of file to have colours
     Config config(logger);
 
-    if (argc == 2) {
-        if (!config.load(argv[1])) {
+    if (argc == 1) {
+        const char* programName = argv[0];
+        if (!config.load(programName)) {
             return (1);
         }
     } else {
-        if (!config.load()) {
+        const std::string configFilename = argv[1];
+        if (!config.load(configFilename)) {
             return (1);
         }
     }
