@@ -35,6 +35,14 @@ CPPFLAGS := -I $(INCLUDE_DIR)
 
 RM := rm -rf
 
+DOCKER_BUILD = docker build -t clang-tools . &> /dev/null
+DOCKER_RUN = docker run --rm -v $$(pwd):/app -w /app clang-tools
+
+ifdef NODOCKER
+	DOCKER_BUILD =
+	DOCKER_RUN =
+endif
+
 # @--------------------------------------------------------------------------@ #
 # |                              Target Section                              | #
 # @--------------------------------------------------------------------------@ #
@@ -57,23 +65,26 @@ quiet:
 	@$(MAKE) -s QUIET=1
 
 apply-format:
-	clang-format -i $(SRC) $(INCLUDE)
+	$(DOCKER_BUILD)
+	$(DOCKER_RUN) clang-format -i $(SRC) $(INCLUDE)
 
 format:
+	$(DOCKER_BUILD)
 	@status=0; \
 	for f in $(SRC) $(INCLUDE); do \
 		echo "Running clang-format on $$f"; \
-		if ! clang-format --dry-run --Werror $$f; then \
+		if ! $(DOCKER_RUN) clang-format --dry-run --Werror $$f; then \
 			status=1; \
 		fi; \
 	done; \
 	exit $$status
 
 tidy:
+	$(DOCKER_BUILD)
 	@status=0; \
 	for f in $(SRC); do \
 		echo "Running clang-tidy on $$f"; \
-		if ! clang-tidy --warnings-as-errors=* -header-filter=.* $$f -- -std=c++98 $(CPPFLAGS); then \
+		if ! $(DOCKER_RUN) clang-tidy --warnings-as-errors=* -header-filter=.* $$f -- -std=c++98 $(CPPFLAGS); then \
 			status=1; \
 		fi; \
 	done; \

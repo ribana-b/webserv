@@ -31,8 +31,8 @@ static int execMonitor(std::vector<Config::Server> servers, Logger& logger) {
 
 int main(int argc, char* argv[]) {
     if (argc > 2) {
-        std::cerr << "\033[31m[ERROR]\033[0m " << "Usage: " << argv[0] << " [CONFIG_FILE]"
-                  << std::endl;
+        std::cerr << "\033[31m[ERROR]\033[0m "
+                  << "Usage: " << argv[0] << " [CONFIG_FILE]" << std::endl;
         return (1);
     }
 
@@ -42,8 +42,8 @@ int main(int argc, char* argv[]) {
     }
     const bool enableColour = true;
     Logger     logger(
-        std::cout,
-        enableColour);  // NOTE(srvariable): Using std::cout instead of file to have colours
+            std::cout,
+            enableColour);  // NOTE(srvariable): Using std::cout instead of file to have colours
     Config config(logger);
 
     if (argc == 1) {

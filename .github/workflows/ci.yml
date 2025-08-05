@@ -24,10 +24,10 @@ jobs:
         sudo apt-get install -y make clang clang-format clang-tidy
 
     - name: Verify everything is formatted properly
-      run: make format
+      run: make format NODOCKER=1
 
     - name: Verify everything is linted properly
-      run: make tidy
+      run: make tidy NODOCKER=1
 
     - name: Verify everything compiles
-      run: make
+      run: make NODOCKER=1
