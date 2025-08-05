@@ -3,3 +3,4 @@ obj/
 webserv
 
 compile_commands.json
+*.log
