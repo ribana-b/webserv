@@ -6,7 +6,7 @@
 /*   By: ribana-b <ribana-b@student.42malaga.com>   +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/07/05 21:51:15 by ribana-b          #+#    #+# Malaga      */
-/*   Updated: 2025/08/05 16:37:28 by ribana-b         ###   ########.com      */
+/*   Updated: 2025/08/05 16:48:29 by ribana-b         ###   ########.com      */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -30,12 +30,12 @@
 #define DECIMAL 10
 
 #define MEGABYTE (int)(1024 * 1024)
-#define BYTE 256
+#define BYTE     256
 
-#define FIRST_OCTET 24
-#define SECOND_OCTET 16
-#define THIRD_OCTET 8
-#define FOURTH_OCTET 0
+#define FIRST_OCTET  (8 * 3)
+#define SECOND_OCTET (8 * 2)
+#define THIRD_OCTET  (8 * 1)
+#define FOURTH_OCTET (8 * 0)
 
 const std::string Config::defaultConfigFilename = "default.conf";
 
@@ -317,8 +317,8 @@ bool Config::load(const std::string& configFilename) {
             return (false);
         }
     }
-
     file.close();
+
     return (true);
 }
 

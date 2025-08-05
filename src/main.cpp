@@ -12,8 +12,8 @@
 
 #include <fstream>   // For std::ofstream
 #include <iostream>  // For std::cout, std::ios::app
-#include <vector>    // For std::vector
 #include <string>    // For std::string
+#include <vector>    // For std::vector
 
 #include "Config.hpp"
 #include "Logger.hpp"

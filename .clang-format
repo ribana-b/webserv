@@ -2,6 +2,7 @@ BasedOnStyle: Google
 
 AccessModifierOffset: -4
 AlignConsecutiveDeclarations: true
+AlignConsecutiveMacros: true
 
 BreakConstructorInitializers: AfterColon
 BreakInheritanceList:         AfterColon

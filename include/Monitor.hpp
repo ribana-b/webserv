@@ -13,10 +13,10 @@
 #ifndef MONITOR_HPP
 #define MONITOR_HPP
 
-#define POLLFD_SIZE 10
+#define POLLFD_SIZE    10
 #define LISTEN_BACKLOG 10
-#define POLL_WAIT 30000
-#define BUFFER_SIZE 500
+#define POLL_WAIT      30000
+#define BUFFER_SIZE    500
 
 /* @------------------------------------------------------------------------@ */
 /* |                            Include Section                             | */
