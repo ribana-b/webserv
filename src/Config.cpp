@@ -6,35 +6,36 @@
 /*   By: ribana-b <ribana-b@student.42malaga.com>   +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/07/05 21:51:15 by ribana-b          #+#    #+# Malaga      */
-/*   Updated: 2025/08/02 22:00:29 by ribana-b         ###   ########.com      */
+/*   Updated: 2025/08/05 16:48:29 by ribana-b         ###   ########.com      */
 /*                                                                            */
 /* ************************************************************************** */
 
 #include "Config.hpp"
 
-#include <arpa/inet.h>   // For htonl, htons
-#include <netinet/in.h>  // For INADDR_ANY
+#include <netinet/in.h>  // For INADDR_ANY, htonl, htons
 #include <stdint.h>      // For int types
 #include <sys/stat.h>    // For stat
 
-#include <cstdlib>   // For std::atoi
-#include <fstream>   // For std::ifstream
-#include <iostream>  // For std::cout
-#include <sstream>   // For std::istringstream
-#include <string>    // For std::string, getline, std::string::npos
-#include <vector>    // For std::vector
+#include <cstddef>    // For std::size_t
+#include <cstdlib>    // For std::atoi
+#include <exception>  // For std::exception
+#include <fstream>    // For std::ifstream
+#include <iostream>   // For std::cout
+#include <sstream>    // For std::istringstream
+#include <string>     // For std::string, getline, std::string::npos
+#include <vector>     // For std::vector
 
 #include "Logger.hpp"
 
 #define DECIMAL 10
 
 #define MEGABYTE (int)(1024 * 1024)
-#define BYTE 256
+#define BYTE     256
 
-#define FIRST_OCTET 24
-#define SECOND_OCTET 16
-#define THIRD_OCTET 8
-#define FOURTH_OCTET 0
+#define FIRST_OCTET  (8 * 3)
+#define SECOND_OCTET (8 * 2)
+#define THIRD_OCTET  (8 * 1)
+#define FOURTH_OCTET (8 * 0)
 
 const std::string Config::defaultConfigFilename = "default.conf";
 
@@ -316,11 +317,47 @@ bool Config::load(const std::string& configFilename) {
             return (false);
         }
     }
-
     file.close();
+
     return (true);
 }
 
-bool Config::load() { return (load(Config::defaultConfigFilename)); }
+std::string Config::searchConfigFile(const char* programName) {
+    std::string basePath(programName);
+    std::size_t pos = basePath.rfind("webserv");
+    if (pos == std::string::npos) {
+        throw(std::exception());  // TODO(srvariable): InvalidProgramNameException
+    }
+    basePath = basePath.substr(0, pos);
+
+    const std::string searchPaths[] = {
+        "config",
+        "config/valid",
+    };
+    const std::size_t searchPathsSize = sizeof(searchPaths) / sizeof(searchPaths[0]);
+
+    std::size_t searchPathIndex = 0;
+    for (; searchPathIndex < searchPathsSize; ++searchPathIndex) {
+        const std::string path = basePath + searchPaths[searchPathIndex] + "/";
+        const std::string configFilename = path + Config::defaultConfigFilename;
+        std::ifstream     file(configFilename.c_str());
+        if (!file.is_open()) {
+            continue;
+        }
+        file.close();
+        return (configFilename);
+    }
+    throw(std::exception());  // TODO(srvariable): FileNotFoundException
+}
+
+bool Config::load(const char* programName) {
+    try {
+        const std::string configFilename = searchConfigFile(programName);
+        return (load(configFilename));
+    } catch (const std::exception& e) {
+        m_Logger.error() << e.what();
+        return (false);
+    }
+}
 
 std::vector<Config::Server> Config::getServers() const { return (m_Servers); }
