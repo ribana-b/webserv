@@ -36,7 +36,7 @@ CPPFLAGS := -I $(INCLUDE_DIR)
 RM := rm -rf
 
 DOCKER_BUILD = docker build -t clang-tools . &> /dev/null
-DOCKER_RUN = docker run --rm -v $$(pwd):/app -w /app clang-tools
+DOCKER_RUN = docker run --rm -v $$(pwd):/app -w /app -u $$(id -u):$$(id -g) clang-tools
 
 ifdef NODOCKER
 	DOCKER_BUILD =
