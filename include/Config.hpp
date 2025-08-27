@@ -53,7 +53,7 @@ public:
     bool load(const std::string& configFilename);
     bool load(const char* programName);
 
-    std::vector<Server> getServers() const;
+    const std::vector<Server>& getServers() const;
 
 private:
     static const std::string defaultConfigFilename;

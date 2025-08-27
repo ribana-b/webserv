@@ -137,6 +137,8 @@ std::size_t Config::parseClientMaxBodySize(const std::string& value) {
     std::size_t size = std::strtoul(value.c_str(), &end, DECIMAL);
     if (*end == 'm' || *end == 'M') {
         size *= MEGABYTE;
+    } else if (*end == '\0') {
+        // No suffix means bytes - keep as is
     } else {
         throw(std::exception());  // TODO(srvariable): InvalidSizeException
     }
@@ -146,25 +148,21 @@ std::size_t Config::parseClientMaxBodySize(const std::string& value) {
 
 void Config::handleClosedContext(Server& server, Location& currentLocation, bool& inLocation) {
     if (inLocation) {
-        m_Logger.debug() << "location context closed";
         server.locations.push_back(currentLocation);
         currentLocation = Location();
         inLocation = false;
     } else {
-        m_Logger.debug() << "server context closed";
         m_Servers.push_back(server);
         server = Server();
     }
 }
 
 void Config::handleListen(Server& server, std::istringstream& iss) {
-    m_Logger.debug() << "listen directive";
     server.listens.push_back(parseListen(getValue(iss)));
 }
 
 void Config::handleRoot(Server& server, Location& currentLocation, bool& inLocation,
                         std::istringstream& iss) {
-    m_Logger.debug() << "root directive";
     std::string root = getValue(iss);
     if (inLocation) {
         currentLocation.root = root;
@@ -174,14 +172,12 @@ void Config::handleRoot(Server& server, Location& currentLocation, bool& inLocat
 }
 
 void Config::handleErrorPage(Server& server, std::istringstream& iss) {
-    m_Logger.debug() << "error_page directive";
     int errorCode;
     iss >> errorCode;
     server.errorPages[errorCode] = getValue(iss);
 }
 
 void Config::handleLocation(Location& currentLocation, bool& inLocation, std::istringstream& iss) {
-    m_Logger.debug() << "location context opened";
     inLocation = true;
     std::string path;
     iss >> path;
@@ -190,7 +186,6 @@ void Config::handleLocation(Location& currentLocation, bool& inLocation, std::is
 
 void Config::handleIndex(Server& server, Location& currentLocation, bool& inLocation,
                          std::istringstream& iss) {
-    m_Logger.debug() << "index directive";
     std::vector<std::string> index = getValues(iss);
     if (inLocation) {
         currentLocation.index = index;
@@ -200,7 +195,6 @@ void Config::handleIndex(Server& server, Location& currentLocation, bool& inLoca
 }
 
 void Config::handleAutoindex(Location& currentLocation, std::istringstream& iss) {
-    m_Logger.debug() << "autoindex directive";
     std::string value = getValue(iss);
     if (value == "on") {
         currentLocation.autoindex = true;
@@ -212,7 +206,6 @@ void Config::handleAutoindex(Location& currentLocation, std::istringstream& iss)
 }
 
 void Config::handleAllowMethods(Location& currentLocation, std::istringstream& iss) {
-    m_Logger.debug() << "allow_methods directive";
     std::vector<std::string> values = getValues(iss);
     for (std::size_t i = 0; i < values.size(); ++i) {
         currentLocation.allowMethods.insert(values[i]);
@@ -220,7 +213,6 @@ void Config::handleAllowMethods(Location& currentLocation, std::istringstream& i
 }
 
 void Config::handleClientMaxBodySize(Location& currentLocation, std::istringstream& iss) {
-    m_Logger.debug() << "client_max_body_size directive";
     currentLocation.clientMaxBodySize = parseClientMaxBodySize(getValue(iss));
 }
 
@@ -230,10 +222,14 @@ void Config::parseLine(const std::string& line, Server& server, Location& curren
     std::istringstream iss(line);
     std::string        key;
     iss >> key;
+    
+    
+    if (key.empty()) {
+        return;
+    }
 
     if (key == "server" || key == "{") {
         if (key == "server") {
-            m_Logger.debug() << "server context opened";
         }
         return;
     }
@@ -262,11 +258,13 @@ void Config::parseLine(const std::string& line, Server& server, Location& curren
 }
 
 static void trim(std::string& line) {
-    std::size_t start = line.find_first_not_of(" \t\r\v\f");
+    std::size_t start = line.find_first_not_of(" \t\r\v\f\n");
     if (start == std::string::npos) {
+        // Line contains only whitespace, make it empty
+        line.clear();
         return;
     }
-    std::size_t end = line.find_last_not_of(" \t\r\v\f");
+    std::size_t end = line.find_last_not_of(" \t\r\v\f\n");
     line = line.substr(start, end - start + 1);
 }
 
@@ -303,22 +301,38 @@ bool Config::load(const std::string& configFilename) {
     Location    currentLocation;
     bool        inLocation = false;
     std::string line;
-    while (getline(file, line).good()) {
+    int lineNumber = 0;
+    
+    while (getline(file, line)) {
+        lineNumber++;
+        std::string originalLine = line;
+        
+        
         removeComments(line);
+        
         trim(line);
+        
         if (line.empty()) {
             continue;
         }
 
         try {
             parseLine(line, server, currentLocation, inLocation);
+            
+            // Log server.root after potential changes
         } catch (const std::exception& e) {
-            m_Logger.error() << e.what();
+            m_Logger.error() << "Error parsing line " << lineNumber << ": " << e.what();
             return (false);
         }
     }
     file.close();
-
+    
+    // Debug final server state (after parsing, server should be empty if correctly processed)
+    
+    // Debug all servers that were added during parsing
+    
+    // Don't add server again - handleClosedContext already added it
+    
     return (true);
 }
 
@@ -360,4 +374,4 @@ bool Config::load(const char* programName) {
     }
 }
 
-std::vector<Config::Server> Config::getServers() const { return (m_Servers); }
+const std::vector<Config::Server>& Config::getServers() const { return m_Servers; }

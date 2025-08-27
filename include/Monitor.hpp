@@ -26,6 +26,7 @@
 
 #include "Config.hpp"
 #include "Logger.hpp"
+#include "HttpServer.hpp"
 
 /* @------------------------------------------------------------------------@ */
 /* |                             Class Section                              | */
@@ -35,9 +36,14 @@ struct pollfd;
 
 class Monitor {
 private:
-    Logger         logger;
-    struct pollfd *fds;
+    Logger                       logger;
+    HttpServer                  *httpServer;
+    Config                       config;
+    std::vector<Config::Server>  servers;  // Store servers for HTTP processing
+    struct pollfd               *fds;
     int           *listenFds;
+    int           *listenPorts;  // Track which port each listen fd is for
+    int           *connectionPorts;  // Track which port each connection fd came from
     int            listenCount;
     int            fdCount;
     int            maxFd;
@@ -47,10 +53,13 @@ private:
     enum ExecResult { EXEC_SUCCESS, EXEC_CONNECTION_ERROR, EXEC_FATAL_ERROR };
 
     void       addPollFd(int fdesc);
+    void       addPollFd(int fdesc, int port);
     void       closePollFd(int fdesc);
     void       cleanPollFds();
     int        isPollFd(int fdesc) const;
     int        isListenFd(int fdesc) const;
+    int        getPortForFd(int fdesc) const;
+    int        getPortForConnection(int fdesc) const;
     InitResult initData(std::vector<Config::Server> servers);
     static int initListenFd(struct sockaddr_in &address);
     int        eventInit(int ready);
@@ -58,13 +67,14 @@ private:
     ExecResult eventExecType(int fdesc, int &ready);
     ExecResult eventExecConnection(int fdesc, int &ready);
     ExecResult eventExecRequest(int fdesc, int &ready);
+    ExecResult handleLargeUpload(int fdesc, const std::string& rawRequest, std::size_t headerEnd, std::size_t contentLength, int &ready);
 
 public:
     Monitor(const Logger &logger);
     Monitor();
     ~Monitor();
 
-    int  init(std::vector<Config::Server> servers);
+    int  init(const Config& config);
     void beginLoop();
 };
 

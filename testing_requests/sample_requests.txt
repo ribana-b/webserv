@@ -1,0 +1,172 @@
+# Sample HTTP Requests for Manual Testing
+
+## Basic GET Request
+```
+GET / HTTP/1.1
+Host: localhost:8080
+User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate
+Connection: keep-alive
+
+```
+
+## POST Request with Form Data
+```
+POST /api/login HTTP/1.1
+Host: example.com
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 29
+User-Agent: TestClient/1.0
+
+username=admin&password=12345
+```
+
+## POST Request with JSON Data
+```
+POST /api/users HTTP/1.1
+Host: api.example.com
+Content-Type: application/json
+Content-Length: 45
+Authorization: Bearer abc123
+
+{"name":"John","email":"john@example.com"}
+```
+
+## DELETE Request
+```
+DELETE /api/users/123 HTTP/1.1
+Host: api.example.com
+Authorization: Bearer token123
+User-Agent: ApiClient/2.0
+
+```
+
+## GET with Query Parameters
+```
+GET /search?q=webserv&lang=cpp&limit=10 HTTP/1.1
+Host: search.example.com
+Accept: application/json
+User-Agent: SearchBot/1.0
+
+```
+
+## Request with Custom Headers
+```
+GET /protected HTTP/1.1
+Host: secure.example.com
+Authorization: Basic dXNlcjpwYXNz
+X-Custom-Header: CustomValue
+X-Request-ID: req-12345
+Accept: application/json
+
+```
+
+## File Upload Simulation (multipart)
+```
+POST /upload HTTP/1.1
+Host: files.example.com
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Length: 234
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="file"; filename="test.txt"
+Content-Type: text/plain
+
+Hello World Content
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
+```
+
+## Edge Cases
+
+### Empty Body with Content-Length 0
+```
+POST /submit HTTP/1.1
+Host: localhost
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 0
+
+```
+
+### Headers with Empty Values
+```
+GET /test HTTP/1.1
+Host: localhost
+Custom-Header: 
+Another-Header: value
+Empty-Value:
+
+```
+
+### Very Long Path
+```
+GET /very/long/path/with/many/segments/that/could/test/buffer/limits/and/parsing/capabilities/of/the/http/parser?param1=value1&param2=value2&param3=value3&param4=value4&param5=value5 HTTP/1.1
+Host: localhost
+
+```
+
+## Invalid Requests (Should be rejected)
+
+### Invalid Method
+```
+INVALID /path HTTP/1.1
+Host: localhost
+
+```
+
+### Missing HTTP Version
+```
+GET /path
+Host: localhost
+
+```
+
+### Invalid Path (doesn't start with /)
+```
+GET invalid-path HTTP/1.1
+Host: localhost
+
+```
+
+### Incomplete Headers (no final CRLF)
+```
+GET /test HTTP/1.1
+Host: localhost
+```
+
+### Content-Length Mismatch
+```
+POST /submit HTTP/1.1
+Content-Length: 50
+
+short
+```
+
+## Testing with curl
+
+You can also test with curl commands:
+
+```bash
+# Basic GET
+curl -v http://localhost:8080/
+
+# POST with data
+curl -X POST -d "name=test&value=123" http://localhost:8080/submit
+
+# Custom headers
+curl -H "Custom-Header: TestValue" http://localhost:8080/
+
+# DELETE request
+curl -X DELETE http://localhost:8080/api/resource/123
+```
+
+## Testing with telnet
+
+```bash
+# Connect to server
+telnet localhost 8080
+
+# Then paste any of the above requests manually
+# Remember to use actual CRLF (\r\n) line endings
+```

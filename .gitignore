@@ -4,3 +4,4 @@ webserv
 
 compile_commands.json
 *.log
+.CLAUDE.md

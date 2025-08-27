@@ -13,6 +13,10 @@ INCLUDE_FILES := Webserv.hpp\
 				 Config.hpp\
 				 Logger.hpp\
 				 colour.hpp\
+				 HttpRequest.hpp\
+				 HttpResponse.hpp\
+				 HttpServer.hpp\
+				 UploadManager.hpp\
 
 SRC_FILES     := main.cpp\
 				 Monitor.cpp\
@@ -21,6 +25,10 @@ SRC_FILES     := main.cpp\
 				 Config.cpp\
 				 Logger.cpp\
 				 colour.cpp\
+				 HttpRequest.cpp\
+				 HttpResponse.cpp\
+				 HttpServer.cpp\
+				 UploadManager.cpp\
 
 SRC := $(addprefix $(SRC_DIR), $(SRC_FILES))
 INCLUDE := $(addprefix $(INCLUDE_DIR), $(INCLUDE_FILES))

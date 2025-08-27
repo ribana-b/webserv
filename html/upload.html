@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebServ File Upload</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; text-align: center; }
+        .upload-form { margin: 30px 0; padding: 20px; border: 2px dashed #ddd; border-radius: 8px; }
+        input[type="file"] { margin: 10px 0; }
+        button { background: #007cba; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #005a8b; }
+        .files-list { margin-top: 30px; }
+        .file-item { padding: 10px; margin: 5px 0; background: #f8f9fa; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }
+        .delete-btn { background: #dc3545; color: white; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px; }
+        .delete-btn:hover { background: #c82333; }
+        .success { color: #28a745; font-weight: bold; }
+        .error { color: #dc3545; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🦔 WebServ File Upload</h1>
+        <p>Upload files to the server and manage them with HTTP methods (GET, POST, DELETE).</p>
+        
+        <div class="upload-form">
+            <h3>📤 Upload File</h3>
+            <form id="uploadForm" action="/upload" method="POST" enctype="multipart/form-data">
+                <input type="file" id="fileInput" name="file" required>
+                <br>
+                <button type="submit">Upload File</button>
+            </form>
+            <div id="uploadStatus"></div>
+        </div>
+        
+        <div class="files-list">
+            <h3>📁 Current Files</h3>
+            <div id="filesList">
+                <p>Loading files...</p>
+            </div>
+            <button onclick="refreshFiles()">🔄 Refresh</button>
+        </div>
+        
+        <div style="margin-top: 30px; padding: 20px; background: #e9ecef; border-radius: 8px;">
+            <h4>🧪 Test HTTP Methods</h4>
+            <p><strong>GET:</strong> <a href="/">Browse files</a> | <a href="/subdir/">View subdirectory</a></p>
+            <p><strong>POST:</strong> Use the upload form above</p>
+            <p><strong>DELETE:</strong> Click the red delete buttons next to files</p>
+        </div>
+    </div>
+
+    <script>
+        // Simple JavaScript for file management
+        function refreshFiles() {
+            document.getElementById('filesList').innerHTML = '<p>Refreshing...</p>';
+            // Simulate file listing - in a real implementation this would fetch from server
+            setTimeout(() => {
+                document.getElementById('filesList').innerHTML = `
+                    <div class="file-item">
+                        <span>📄 index.html (61 bytes)</span>
+                        <button class="delete-btn" onclick="deleteFile('/index.html')">Delete</button>
+                    </div>
+                    <div class="file-item">
+                        <span>📄 test.txt (24 bytes)</span>
+                        <button class="delete-btn" onclick="deleteFile('/test.txt')">Delete</button>
+                    </div>
+                    <div class="file-item">
+                        <span>📄 upload.html (this file)</span>
+                        <button class="delete-btn" onclick="deleteFile('/upload.html')">Delete</button>
+                    </div>
+                `;
+            }, 500);
+        }
+        
+        function deleteFile(filePath) {
+            if (confirm('Are you sure you want to delete ' + filePath + '?')) {
+                fetch(filePath, { method: 'DELETE' })
+                    .then(response => response.text())
+                    .then(data => {
+                        alert('File deleted successfully!');
+                        refreshFiles();
+                    })
+                    .catch(error => {
+                        alert('Error deleting file: ' + error);
+                    });
+            }
+        }
+        
+        // Load files on page load
+        refreshFiles();
+        
+        // Handle upload form
+        document.getElementById('uploadForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const fileInput = document.getElementById('fileInput');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                alert('Please select a file');
+                return;
+            }
+            
+            document.getElementById('uploadStatus').innerHTML = '<p>Uploading...</p>';
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.text())
+            .then(data => {
+                document.getElementById('uploadStatus').innerHTML = '<p class="success">Upload successful!</p>';
+                fileInput.value = '';
+                refreshFiles();
+            })
+            .catch(error => {
+                document.getElementById('uploadStatus').innerHTML = '<p class="error">Upload failed: ' + error + '</p>';
+            });
+        });
+    </script>
+</body>
+</html>
