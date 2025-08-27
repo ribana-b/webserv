@@ -12,9 +12,9 @@
 
 #include "UploadManager.hpp"
 
-#include <unistd.h>    // For write, close, unlink
 #include <fcntl.h>     // For open, O_CREAT, etc
 #include <sys/stat.h>  // For file permissions
+#include <unistd.h>    // For write, close, unlink
 
 #include <cstdlib>   // For mkstemp
 #include <cstring>   // For strlen
@@ -28,11 +28,23 @@
 /* |                        Constructor/Destructor                          | */
 /* @------------------------------------------------------------------------@ */
 
-UploadManager::UploadManager() : m_Logger(std::cout, true), m_TempFd(-1), 
-    m_ExpectedSize(0), m_BytesWritten(0), m_IsActive(false), m_IsComplete(false), m_AutoCleanup(true) {}
+UploadManager::UploadManager() :
+    m_Logger(std::cout, true),
+    m_TempFd(-1),
+    m_ExpectedSize(0),
+    m_BytesWritten(0),
+    m_IsActive(false),
+    m_IsComplete(false),
+    m_AutoCleanup(true) {}
 
-UploadManager::UploadManager(const Logger& logger) : m_Logger(logger), m_TempFd(-1),
-    m_ExpectedSize(0), m_BytesWritten(0), m_IsActive(false), m_IsComplete(false), m_AutoCleanup(true) {}
+UploadManager::UploadManager(const Logger& logger) :
+    m_Logger(logger),
+    m_TempFd(-1),
+    m_ExpectedSize(0),
+    m_BytesWritten(0),
+    m_IsActive(false),
+    m_IsComplete(false),
+    m_AutoCleanup(true) {}
 
 UploadManager::~UploadManager() {
     if (m_AutoCleanup) {
@@ -40,17 +52,22 @@ UploadManager::~UploadManager() {
     }
 }
 
-UploadManager::UploadManager(const UploadManager& that) : m_Logger(that.m_Logger),
-    m_TempFilePath(that.m_TempFilePath), m_TempFd(-1), 
-    m_ExpectedSize(that.m_ExpectedSize), m_BytesWritten(that.m_BytesWritten),
-    m_IsActive(false), m_IsComplete(that.m_IsComplete), m_AutoCleanup(that.m_AutoCleanup) {
+UploadManager::UploadManager(const UploadManager& that) :
+    m_Logger(that.m_Logger),
+    m_TempFilePath(that.m_TempFilePath),
+    m_TempFd(-1),
+    m_ExpectedSize(that.m_ExpectedSize),
+    m_BytesWritten(that.m_BytesWritten),
+    m_IsActive(false),
+    m_IsComplete(that.m_IsComplete),
+    m_AutoCleanup(that.m_AutoCleanup) {
     // Note: Don't copy file descriptor, each instance should manage its own
 }
 
 UploadManager& UploadManager::operator=(const UploadManager& that) {
     if (this != &that) {
-        cleanup(); // Clean up current state
-        
+        cleanup();  // Clean up current state
+
         m_Logger = that.m_Logger;
         m_TempFilePath = that.m_TempFilePath;
         m_TempFd = -1;
@@ -82,8 +99,8 @@ bool UploadManager::startLargeUpload(std::size_t contentLength) {
     }
 
     m_IsActive = true;
-    m_Logger.info() << "UploadManager: Started streaming upload for " 
-                    << contentLength << " bytes to " << m_TempFilePath;
+    m_Logger.info() << "UploadManager: Started streaming upload for " << contentLength
+                    << " bytes to " << m_TempFilePath;
     return true;
 }
 
@@ -106,8 +123,8 @@ bool UploadManager::writeChunk(const char* data, std::size_t size) {
     }
 
     if (static_cast<std::size_t>(bytesWritten) != size) {
-        m_Logger.error() << "UploadManager: Partial write (" << bytesWritten 
-                         << "/" << size << " bytes)";
+        m_Logger.error() << "UploadManager: Partial write (" << bytesWritten << "/" << size
+                         << " bytes)";
         return false;
     }
 
@@ -123,17 +140,17 @@ bool UploadManager::finishUpload() {
     }
 
     if (m_BytesWritten != m_ExpectedSize) {
-        m_Logger.warn() << "UploadManager: Upload incomplete (" 
-                        << m_BytesWritten << "/" << m_ExpectedSize << " bytes)";
+        m_Logger.warn() << "UploadManager: Upload incomplete (" << m_BytesWritten << "/"
+                        << m_ExpectedSize << " bytes)";
         return false;
     }
 
     closeTempFile();
     m_IsActive = false;
     m_IsComplete = true;
-    
-    m_Logger.info() << "UploadManager: Upload completed successfully (" 
-                    << m_BytesWritten << " bytes) -> " << m_TempFilePath;
+
+    m_Logger.info() << "UploadManager: Upload completed successfully (" << m_BytesWritten
+                    << " bytes) -> " << m_TempFilePath;
     return true;
 }
 
@@ -141,12 +158,12 @@ void UploadManager::cleanup() {
     if (m_TempFd != -1) {
         closeTempFile();
     }
-    
+
     if (!m_TempFilePath.empty()) {
         deleteTempFile();
         m_TempFilePath.clear();
     }
-    
+
     m_IsActive = false;
     m_IsComplete = false;
     m_BytesWritten = 0;
@@ -157,25 +174,15 @@ void UploadManager::cleanup() {
 /* |                          Status and Info Methods                       | */
 /* @------------------------------------------------------------------------@ */
 
-bool UploadManager::isLargeUpload() const {
-    return m_ExpectedSize >= LARGE_FILE_THRESHOLD;
-}
+bool UploadManager::isLargeUpload() const { return m_ExpectedSize >= LARGE_FILE_THRESHOLD; }
 
-bool UploadManager::isComplete() const {
-    return m_IsComplete;
-}
+bool UploadManager::isComplete() const { return m_IsComplete; }
 
-const std::string& UploadManager::getTempFilePath() const {
-    return m_TempFilePath;
-}
+const std::string& UploadManager::getTempFilePath() const { return m_TempFilePath; }
 
-std::size_t UploadManager::getBytesWritten() const {
-    return m_BytesWritten;
-}
+std::size_t UploadManager::getBytesWritten() const { return m_BytesWritten; }
 
-std::size_t UploadManager::getExpectedSize() const {
-    return m_ExpectedSize;
-}
+std::size_t UploadManager::getExpectedSize() const { return m_ExpectedSize; }
 
 /* @------------------------------------------------------------------------@ */
 /* |                            Utility Methods                             | */
@@ -184,13 +191,15 @@ std::size_t UploadManager::getExpectedSize() const {
 std::string UploadManager::readFromTempFile() const {
     if (!m_IsComplete || m_TempFilePath.empty()) {
         // Use const_cast to work around Logger's non-const methods
-        const_cast<Logger&>(m_Logger).warn() << "UploadManager: Cannot read from temp file, upload not complete";
+        const_cast<Logger&>(m_Logger).warn()
+            << "UploadManager: Cannot read from temp file, upload not complete";
         return "";
     }
 
     std::ifstream file(m_TempFilePath.c_str(), std::ios::binary);
     if (!file.is_open()) {
-        const_cast<Logger&>(m_Logger).error() << "UploadManager: Failed to open temp file for reading: " << m_TempFilePath;
+        const_cast<Logger&>(m_Logger).error()
+            << "UploadManager: Failed to open temp file for reading: " << m_TempFilePath;
         return "";
     }
 
@@ -210,21 +219,18 @@ bool UploadManager::moveTempFile(const std::string& destination) {
 
     // Use system rename for atomic move operation
     if (rename(m_TempFilePath.c_str(), destination.c_str()) != 0) {
-        m_Logger.error() << "UploadManager: Failed to move " << m_TempFilePath 
-                         << " to " << destination;
+        m_Logger.error() << "UploadManager: Failed to move " << m_TempFilePath << " to "
+                         << destination;
         return false;
     }
 
-    m_Logger.info() << "UploadManager: Moved temp file " << m_TempFilePath 
-                    << " to " << destination;
-    
-    m_TempFilePath = destination; // Update path to new location
+    m_Logger.info() << "UploadManager: Moved temp file " << m_TempFilePath << " to " << destination;
+
+    m_TempFilePath = destination;  // Update path to new location
     return true;
 }
 
-void UploadManager::disableAutoCleanup() {
-    m_AutoCleanup = false;
-}
+void UploadManager::disableAutoCleanup() { m_AutoCleanup = false; }
 
 bool UploadManager::isLargeFile(std::size_t contentLength) {
     return contentLength >= LARGE_FILE_THRESHOLD;
@@ -236,11 +242,11 @@ bool UploadManager::isLargeFile(std::size_t contentLength) {
 
 std::string UploadManager::generateTempFilePath() {
     char tempTemplate[] = "/tmp/webserv_upload_XXXXXX";
-    int fd = mkstemp(tempTemplate);
+    int  fd = mkstemp(tempTemplate);
     if (fd == -1) {
         return "";
     }
-    
+
     // Close the fd immediately, we'll reopen it properly
     close(fd);
     return std::string(tempTemplate);

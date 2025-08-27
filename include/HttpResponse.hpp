@@ -18,9 +18,8 @@
 /* @------------------------------------------------------------------------@ */
 
 #include <cstddef>  // For std::size_t
-
-#include <map>     // For std::map
-#include <string>  // For std::string
+#include <map>      // For std::map
+#include <string>   // For std::string
 
 #include "Logger.hpp"
 

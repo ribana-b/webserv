@@ -18,9 +18,8 @@
 /* @------------------------------------------------------------------------@ */
 
 #include <cstddef>  // For std::size_t
-
-#include <map>     // For std::map
-#include <string>  // For std::string
+#include <map>      // For std::map
+#include <string>   // For std::string
 
 #include "Logger.hpp"
 
@@ -47,7 +46,7 @@ public:
     const std::string& getHeader(const std::string& key) const;
     const std::string& getBody() const;
     std::size_t        getContentLength() const;
-    
+
     // Large file upload support
     bool               hasLargeUpload() const;
     const std::string& getTempFilePath() const;

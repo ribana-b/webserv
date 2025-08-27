@@ -25,8 +25,8 @@
 #include <vector>  // For std::vector
 
 #include "Config.hpp"
-#include "Logger.hpp"
 #include "HttpServer.hpp"
+#include "Logger.hpp"
 
 /* @------------------------------------------------------------------------@ */
 /* |                             Class Section                              | */
@@ -36,17 +36,17 @@ struct pollfd;
 
 class Monitor {
 private:
-    Logger                       logger;
-    HttpServer                  *httpServer;
-    Config                       config;
-    std::vector<Config::Server>  servers;  // Store servers for HTTP processing
-    struct pollfd               *fds;
-    int           *listenFds;
-    int           *listenPorts;  // Track which port each listen fd is for
-    int           *connectionPorts;  // Track which port each connection fd came from
-    int            listenCount;
-    int            fdCount;
-    int            maxFd;
+    Logger                      logger;
+    HttpServer                 *httpServer;
+    Config                      config;
+    std::vector<Config::Server> servers;  // Store servers for HTTP processing
+    struct pollfd              *fds;
+    int                        *listenFds;
+    int                        *listenPorts;      // Track which port each listen fd is for
+    int                        *connectionPorts;  // Track which port each connection fd came from
+    int                         listenCount;
+    int                         fdCount;
+    int                         maxFd;
 
     enum InitResult { INIT_SUCCESS, INIT_MEMORY_ERROR, INIT_LISTEN_ERROR };
 
@@ -67,14 +67,15 @@ private:
     ExecResult eventExecType(int fdesc, int &ready);
     ExecResult eventExecConnection(int fdesc, int &ready);
     ExecResult eventExecRequest(int fdesc, int &ready);
-    ExecResult handleLargeUpload(int fdesc, const std::string& rawRequest, std::size_t headerEnd, std::size_t contentLength, int &ready);
+    ExecResult handleLargeUpload(int fdesc, const std::string &rawRequest, std::size_t headerEnd,
+                                 std::size_t contentLength, int &ready);
 
 public:
     Monitor(const Logger &logger);
     Monitor();
     ~Monitor();
 
-    int  init(const Config& config);
+    int  init(const Config &config);
     void beginLoop();
 };
 

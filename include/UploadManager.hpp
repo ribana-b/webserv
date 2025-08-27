@@ -42,10 +42,10 @@ public:
     UploadManager& operator=(const UploadManager& that);
 
     // Main streaming methods
-    bool        startLargeUpload(std::size_t contentLength);
-    bool        writeChunk(const char* data, std::size_t size);
-    bool        finishUpload();
-    void        cleanup();
+    bool startLargeUpload(std::size_t contentLength);
+    bool writeChunk(const char* data, std::size_t size);
+    bool finishUpload();
+    void cleanup();
 
     // Status and info methods
     bool               isLargeUpload() const;

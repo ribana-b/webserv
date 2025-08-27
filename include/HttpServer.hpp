@@ -44,34 +44,41 @@ public:
     const std::string& getDefaultIndex() const;
 
     // Public methods for testing
-    HttpResponse testGenerateDirectoryListing(const std::string& dirPath, const std::string& requestPath, const Config::Server& server);
+    HttpResponse testGenerateDirectoryListing(const std::string&    dirPath,
+                                              const std::string&    requestPath,
+                                              const Config::Server& server);
     HttpResponse testServeStaticFile(const std::string& filePath, const Config::Server& server);
     HttpResponse testCreateErrorResponse(int statusCode, const Config::Server& server);
-    bool testIsPathSafe(const std::string& path) const;
-    std::string testResolvePath(const std::string& requestPath, const Config::Location& location) const;
-    std::string testJoinPath(const std::string& base, const std::string& path) const;
+    bool         testIsPathSafe(const std::string& path) const;
+    std::string  testResolvePath(const std::string&      requestPath,
+                                 const Config::Location& location) const;
+    std::string  testJoinPath(const std::string& base, const std::string& path) const;
 
 private:
-    const Config&      m_Config;
-    mutable Logger     m_Logger;
-    std::string        m_DocumentRoot;
-    std::string        m_DefaultIndex;
+    const Config&  m_Config;
+    mutable Logger m_Logger;
+    std::string    m_DocumentRoot;
+    std::string    m_DefaultIndex;
 
     HttpResponse handleGET(const HttpRequest& request, const Config::Server& server);
     HttpResponse handlePOST(const HttpRequest& request, const Config::Server& server);
     HttpResponse handleDELETE(const HttpRequest& request, const Config::Server& server);
     HttpResponse handleHEAD(const HttpRequest& request, const Config::Server& server);
-    HttpResponse handleCGI(const HttpRequest& request, const Config::Server& server, const std::string& filePath);
+    HttpResponse handleCGI(const HttpRequest& request, const Config::Server& server,
+                           const std::string& filePath);
 
     HttpResponse serveStaticFile(const std::string& filePath, const Config::Server& server);
-    HttpResponse generateDirectoryListing(const std::string& dirPath, const std::string& requestPath, const Config::Server& server);
+    HttpResponse generateDirectoryListing(const std::string&    dirPath,
+                                          const std::string&    requestPath,
+                                          const Config::Server& server);
 
-    const Config::Server* findMatchingServer(int port) const;
-    const Config::Location* findMatchingLocation(const Config::Server& server, const std::string& path) const;
+    const Config::Server*   findMatchingServer(int port) const;
+    const Config::Location* findMatchingLocation(const Config::Server& server,
+                                                 const std::string&    path) const;
 
-    bool isMethodAllowed(const std::string& method, const Config::Location& location) const;
-    bool isPathSafe(const std::string& path) const;
-    bool isCGIFile(const std::string& filePath) const;
+    bool        isMethodAllowed(const std::string& method, const Config::Location& location) const;
+    bool        isPathSafe(const std::string& path) const;
+    bool        isCGIFile(const std::string& filePath) const;
     std::string resolvePath(const std::string& requestPath, const Config::Location& location) const;
     std::string joinPath(const std::string& base, const std::string& path) const;
 

@@ -222,8 +222,7 @@ void Config::parseLine(const std::string& line, Server& server, Location& curren
     std::istringstream iss(line);
     std::string        key;
     iss >> key;
-    
-    
+
     if (key.empty()) {
         return;
     }
@@ -301,24 +300,23 @@ bool Config::load(const std::string& configFilename) {
     Location    currentLocation;
     bool        inLocation = false;
     std::string line;
-    int lineNumber = 0;
-    
+    int         lineNumber = 0;
+
     while (getline(file, line)) {
         lineNumber++;
         std::string originalLine = line;
-        
-        
+
         removeComments(line);
-        
+
         trim(line);
-        
+
         if (line.empty()) {
             continue;
         }
 
         try {
             parseLine(line, server, currentLocation, inLocation);
-            
+
             // Log server.root after potential changes
         } catch (const std::exception& e) {
             m_Logger.error() << "Error parsing line " << lineNumber << ": " << e.what();
@@ -326,13 +324,13 @@ bool Config::load(const std::string& configFilename) {
         }
     }
     file.close();
-    
+
     // Debug final server state (after parsing, server should be empty if correctly processed)
-    
+
     // Debug all servers that were added during parsing
-    
+
     // Don't add server again - handleClosedContext already added it
-    
+
     return (true);
 }
 
