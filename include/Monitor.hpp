@@ -13,10 +13,13 @@
 #ifndef MONITOR_HPP
 #define MONITOR_HPP
 
-#define POLLFD_SIZE    10
-#define LISTEN_BACKLOG 10
-#define POLL_WAIT      30000
-#define BUFFER_SIZE    500
+#define POLLFD_SIZE           10
+#define LISTEN_BACKLOG        10
+#define POLL_WAIT             30000
+#define BUFFER_SIZE           500
+#define CONTENT_LENGTH_HEADER 15
+#define DEFAULT_SERVER_PORT   8080
+#define POLL_TIMEOUT_MS       5000
 
 /* @------------------------------------------------------------------------@ */
 /* |                            Include Section                             | */
@@ -27,6 +30,10 @@
 #include "Config.hpp"
 #include "HttpServer.hpp"
 #include "Logger.hpp"
+
+class UploadManager;  // Forward declaration
+class HttpResponse;   // Forward declaration
+class HttpRequest;    // Forward declaration
 
 /* @------------------------------------------------------------------------@ */
 /* |                             Class Section                              | */
@@ -67,8 +74,26 @@ private:
     ExecResult eventExecType(int fdesc, int &ready);
     ExecResult eventExecConnection(int fdesc, int &ready);
     ExecResult eventExecRequest(int fdesc, int &ready);
-    ExecResult handleLargeUpload(int fdesc, const std::string &rawRequest, std::size_t headerEnd,
-                                 std::size_t contentLength, int &ready);
+    struct UploadInfo {
+        std::size_t headerEndPos;
+        std::size_t totalContentLength;
+        
+        UploadInfo(std::size_t headerPos, std::size_t contentLen) : headerEndPos(headerPos), totalContentLength(contentLen) {}
+    };
+    
+    ExecResult handleLargeUpload(int fdesc, const std::string &rawRequest, 
+                                 const UploadInfo &uploadInfo, int &ready);
+    
+    // Helper methods to reduce cognitive complexity
+    std::string readHttpRequest(int fdesc);
+    bool        processContentLength(const std::string &rawRequest, std::size_t headerEndPos,
+                                     std::size_t &totalContentLength, std::string &fullRequest, int fdesc);
+    ExecResult  processHttpRequest(int fdesc, const std::string &rawRequest, int &ready);
+    ExecResult  streamRemainingData(int fdesc, UploadManager &uploadManager, std::size_t totalReceived,
+                                    std::size_t totalContentLength);
+    static std::size_t extractContentLength(const std::string &rawRequest, std::size_t contentLengthPos);
+    HttpResponse generateHttpResponse(const HttpRequest &httpRequest, int fdesc);
+    static void  sendHttpResponse(int fdesc, const HttpResponse &httpResponse);
 
 public:
     Monitor(const Logger &logger);

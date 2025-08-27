@@ -39,14 +39,11 @@ int Monitor::eventInit(int ready) {
 }
 
 int Monitor::eventExec(const int fdesc, int &ready) {
-    switch (this->eventExecType(fdesc, ready)) {
-        case Monitor::EXEC_SUCCESS:
-            return 0;
-        case Monitor::EXEC_CONNECTION_ERROR:
-            return 0;
-        case Monitor::EXEC_FATAL_ERROR:
-            return -1;
+    ExecResult result = this->eventExecType(fdesc, ready);
+    if (result == Monitor::EXEC_FATAL_ERROR) {
+        return -1;
     }
+    return 0;
 }
 
 Monitor::ExecResult Monitor::eventExecType(const int fdesc, int &ready) {
@@ -82,125 +79,25 @@ Monitor::ExecResult Monitor::eventExecConnection(const int fdesc, int &ready) {
 }
 
 Monitor::ExecResult Monitor::eventExecRequest(const int fdesc, int &ready) {
-    ssize_t     bytesRead = 1;
-    char        buffer[BUFFER_SIZE + 1];
-    std::string rawRequest;
-
-    // Read HTTP request from socket
-    while (bytesRead != 0) {
-        bytesRead = recv(fdesc, buffer, BUFFER_SIZE, 0);
-        if (bytesRead < 0) {
-            break;
-        }
-        buffer[bytesRead] = '\0';
-        rawRequest += buffer;
-
-        // Check if we have a complete HTTP request (headers end with \r\n\r\n)
-        std::size_t headerEnd = rawRequest.find("\r\n\r\n");
-        if (headerEnd != std::string::npos) {
-            // Check for Content-Length directly in headers string
-            std::string headersSection = rawRequest.substr(0, headerEnd);
-            std::size_t contentLengthPos = headersSection.find("Content-Length:");
-            if (contentLengthPos != std::string::npos) {
-                // Extract Content-Length value
-                std::size_t valueStart = contentLengthPos + 15;  // "Content-Length:" length
-                std::size_t lineEnd = headersSection.find("\r\n", valueStart);
-                if (lineEnd != std::string::npos) {
-                    std::string lengthStr = headersSection.substr(valueStart, lineEnd - valueStart);
-                    // Trim whitespace
-                    while (!lengthStr.empty() && lengthStr[0] == ' ')
-                        lengthStr = lengthStr.substr(1);
-                    while (!lengthStr.empty() && lengthStr[lengthStr.length() - 1] == ' ')
-                        lengthStr = lengthStr.substr(0, lengthStr.length() - 1);
-
-                    std::size_t contentLength =
-                        static_cast<std::size_t>(std::atoi(lengthStr.c_str()));
-                    std::size_t bodyStart = headerEnd + 4;
-                    std::size_t currentBodySize = rawRequest.length() - bodyStart;
-
-                    // Check if this is a large file upload that needs streaming
-                    if (UploadManager::isLargeFile(contentLength)) {
-                        logger.info() << "Large upload detected (" << contentLength
-                                      << " bytes), using streaming to disk";
-                        return handleLargeUpload(fdesc, rawRequest, headerEnd, contentLength,
-                                                 ready);
-                    }
-
-                    // Small file: continue with original logic
-                    if (currentBodySize < contentLength) {
-                        // Continue reading in loop until we have the complete body
-                        while (currentBodySize < contentLength) {
-                            ssize_t moreBytesRead = recv(fdesc, buffer, BUFFER_SIZE, 0);
-                            if (moreBytesRead <= 0) {
-                                if (moreBytesRead == 0) {
-                                    logger.warn() << "Connection closed while reading body";
-                                } else {
-                                    logger.warn() << "Error reading body data: " << errno;
-                                }
-                                break;
-                            }
-                            buffer[moreBytesRead] = '\0';
-                            rawRequest += buffer;
-                            currentBodySize = rawRequest.length() - bodyStart;
-                        }
-
-                        if (currentBodySize >= contentLength) {
-                        }
-                    } else {
-                    }
-                }
-            }
-            break;
-        }
-    }
-
-    // Parse HTTP request
-    HttpRequest httpRequest;
-    httpRequest.parse(rawRequest);
-
-    // Generate HTTP response using HttpServer
-    HttpResponse httpResponse;
-    if (httpRequest.isValid()) {
-        int serverPort = this->getPortForConnection(fdesc);
-        if (serverPort < 0) {
-            // Use first configured server port as fallback instead of hardcoded 8080
-            if (!this->servers.empty() && !this->servers[0].listens.empty()) {
-                serverPort = this->servers[0].listens[0].second;
-            } else {
-                serverPort = 8080;  // Ultimate fallback if no config available
-            }
-        }
-
-        httpResponse = this->httpServer->processRequest(httpRequest, serverPort);
-    } else {
-        logger.warn() << "Invalid HTTP request received";
-        httpResponse = HttpResponse::createBadRequest();
-    }
-
-    // Send HTTP response
-    std::string responseString = httpResponse.toString();
-    send(fdesc, responseString.c_str(), responseString.size(), 0);
-
-    ready--;
-    this->closePollFd(fdesc);
-    return Monitor::EXEC_SUCCESS;
+    std::string rawRequest = readHttpRequest(fdesc);
+    
+    return processHttpRequest(fdesc, rawRequest, ready);
 }
 
 Monitor::ExecResult Monitor::handleLargeUpload(const int fdesc, const std::string &rawRequest,
-                                               std::size_t headerEnd, std::size_t contentLength,
-                                               int &ready) {
+                                               const UploadInfo &uploadInfo, int &ready) {
     Logger logger(std::cout, true);
 
     // Create UploadManager for streaming
     UploadManager uploadManager(logger);
-    if (!uploadManager.startLargeUpload(contentLength)) {
+    if (!uploadManager.startLargeUpload(uploadInfo.totalContentLength)) {
         logger.error() << "Failed to start large upload streaming";
         this->closePollFd(fdesc);
         return Monitor::EXEC_SUCCESS;
     }
 
     // Extract any body data already received
-    std::size_t bodyStart = headerEnd + 4;
+    std::size_t bodyStart = uploadInfo.headerEndPos + 4;
     std::size_t alreadyReceived = 0;
     if (rawRequest.length() > bodyStart) {
         alreadyReceived = rawRequest.length() - bodyStart;
@@ -216,60 +113,10 @@ Monitor::ExecResult Monitor::handleLargeUpload(const int fdesc, const std::strin
 
     // Continue reading remaining body data and stream to disk
     std::size_t totalReceived = alreadyReceived;
-    char        buffer[UPLOAD_BUFFER_SIZE];
-
-    while (totalReceived < contentLength) {
-        ssize_t bytesRead = recv(fdesc, buffer, UPLOAD_BUFFER_SIZE, 0);
-        if (bytesRead <= 0) {
-            if (bytesRead == 0) {
-                logger.warn() << "Connection closed during large upload (received " << totalReceived
-                              << "/" << contentLength << " bytes)";
-                uploadManager.cleanup();
-                this->closePollFd(fdesc);
-                return Monitor::EXEC_SUCCESS;
-            } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // Socket would block, wait for data to be available using poll
-
-                pollfd pfd;
-                pfd.fd = fdesc;
-                pfd.events = POLLIN;
-                pfd.revents = 0;
-
-                int pollResult = poll(&pfd, 1, 5000);  // 5 second timeout
-                if (pollResult <= 0) {
-                    if (pollResult == 0) {
-                        logger.warn() << "Timeout waiting for upload data";
-                    } else {
-                        logger.error() << "Poll error during large upload: " << strerror(errno);
-                    }
-                    uploadManager.cleanup();
-                    this->closePollFd(fdesc);
-                    return Monitor::EXEC_SUCCESS;
-                }
-                continue;
-            } else {
-                logger.error() << "Error reading large upload data: " << strerror(errno)
-                               << " (errno=" << errno << ")";
-                uploadManager.cleanup();
-                this->closePollFd(fdesc);
-                return Monitor::EXEC_SUCCESS;
-            }
-        }
-
-        // Don't read more than we expect
-        std::size_t bytesToWrite = static_cast<std::size_t>(bytesRead);
-        if (totalReceived + bytesToWrite > contentLength) {
-            bytesToWrite = contentLength - totalReceived;
-        }
-
-        if (!uploadManager.writeChunk(buffer, bytesToWrite)) {
-            logger.error() << "Failed to write chunk to disk during large upload";
-            uploadManager.cleanup();
-            this->closePollFd(fdesc);
-            return Monitor::EXEC_SUCCESS;
-        }
-
-        totalReceived += bytesToWrite;
+    
+    ExecResult streamResult = streamRemainingData(fdesc, uploadManager, totalReceived, uploadInfo.totalContentLength);
+    if (streamResult != Monitor::EXEC_SUCCESS) {
+        return streamResult;
     }
 
     // Finish the upload
@@ -284,7 +131,7 @@ Monitor::ExecResult Monitor::handleLargeUpload(const int fdesc, const std::strin
     uploadManager.disableAutoCleanup();
 
     // Create a modified rawRequest with headers only and temp file reference
-    std::string headersOnly = rawRequest.substr(0, headerEnd + 4);
+    std::string headersOnly = rawRequest.substr(0, uploadInfo.headerEndPos + 4);
     logger.info() << "Large upload completed successfully, temp file: "
                   << uploadManager.getTempFilePath();
 
@@ -303,7 +150,7 @@ Monitor::ExecResult Monitor::handleLargeUpload(const int fdesc, const std::strin
             if (!this->servers.empty() && !this->servers[0].listens.empty()) {
                 serverPort = this->servers[0].listens[0].second;
             } else {
-                serverPort = 8080;  // Ultimate fallback if no config available
+                serverPort = DEFAULT_SERVER_PORT;  // Ultimate fallback if no config available
             }
         }
 
@@ -324,4 +171,215 @@ Monitor::ExecResult Monitor::handleLargeUpload(const int fdesc, const std::strin
 
     this->closePollFd(fdesc);
     return Monitor::EXEC_SUCCESS;
+}
+
+std::string Monitor::readHttpRequest(int fdesc) {
+    ssize_t     bytesRead = 1;
+    char        buffer[BUFFER_SIZE + 1];
+    std::string rawRequest;
+
+    while (bytesRead != 0) {
+        bytesRead = recv(fdesc, buffer, BUFFER_SIZE, 0);
+        if (bytesRead < 0) {
+            break;
+        }
+        buffer[bytesRead] = '\0';
+        rawRequest += buffer;
+
+        std::size_t headerEndPos = rawRequest.find("\r\n\r\n");
+        if (headerEndPos != std::string::npos) {
+            std::size_t totalContentLength;
+            std::string fullRequest = rawRequest;
+            if (processContentLength(rawRequest, headerEndPos, totalContentLength, fullRequest, fdesc)) {
+                return fullRequest;
+            }
+            break;
+        }
+    }
+    
+    return rawRequest;
+}
+
+bool Monitor::processContentLength(const std::string &rawRequest, std::size_t headerEndPos,
+                                   std::size_t &totalContentLength, std::string &fullRequest, int fdesc) {
+    std::string headersSection = rawRequest.substr(0, headerEndPos);
+    std::size_t contentLengthPos = headersSection.find("Content-Length:");
+    
+    if (contentLengthPos == std::string::npos) {
+        return false;
+    }
+
+    std::size_t valueStart = contentLengthPos + CONTENT_LENGTH_HEADER;
+    std::size_t lineEnd = headersSection.find("\r\n", valueStart);
+    
+    if (lineEnd == std::string::npos) {
+        return false;
+    }
+
+    std::string lengthStr = headersSection.substr(valueStart, lineEnd - valueStart);
+    
+    while (!lengthStr.empty() && lengthStr[0] == ' ') {
+        lengthStr = lengthStr.substr(1);
+    }
+    while (!lengthStr.empty() && lengthStr[lengthStr.length() - 1] == ' ') {
+        lengthStr = lengthStr.substr(0, lengthStr.length() - 1);
+    }
+
+    totalContentLength = static_cast<std::size_t>(std::atoi(lengthStr.c_str()));
+    std::size_t bodyStart = headerEndPos + 4;
+    std::size_t currentBodySize = rawRequest.length() - bodyStart;
+
+    if (currentBodySize < totalContentLength) {
+        char        buffer[BUFFER_SIZE + 1];
+        std::string completeRequest = rawRequest;
+        
+        while (currentBodySize < totalContentLength) {
+            ssize_t moreBytesRead = recv(fdesc, buffer, BUFFER_SIZE, 0);
+            if (moreBytesRead <= 0) {
+                if (moreBytesRead == 0) {
+                    logger.warn() << "Connection closed while reading body";
+                } else {
+                    logger.warn() << "Error reading body data: " << errno;
+                }
+                break;
+            }
+            buffer[moreBytesRead] = '\0';
+            completeRequest += buffer;
+            currentBodySize = completeRequest.length() - bodyStart;
+        }
+        fullRequest = completeRequest;
+    }
+    
+    return true;
+}
+
+Monitor::ExecResult Monitor::processHttpRequest(int fdesc, const std::string &rawRequest, int &ready) {
+    // Check for large upload first
+    std::size_t headerEndPos = rawRequest.find("\r\n\r\n");
+    if (headerEndPos != std::string::npos) {
+        std::size_t contentLengthPos = rawRequest.find("Content-Length:");
+        if (contentLengthPos != std::string::npos && contentLengthPos < headerEndPos) {
+            std::size_t contentLength = extractContentLength(rawRequest, contentLengthPos);
+            if (UploadManager::isLargeFile(contentLength)) {
+                logger.info() << "Large upload detected (" << contentLength
+                              << " bytes), using streaming to disk";
+                UploadInfo uploadInfo(headerEndPos, contentLength);
+                return handleLargeUpload(fdesc, rawRequest, uploadInfo, ready);
+            }
+        }
+    }
+
+    // Process regular request
+    HttpRequest httpRequest;
+    httpRequest.parse(rawRequest);
+
+    HttpResponse httpResponse = generateHttpResponse(httpRequest, fdesc);
+    sendHttpResponse(fdesc, httpResponse);
+
+    ready--;
+    this->closePollFd(fdesc);
+    return Monitor::EXEC_SUCCESS;
+}
+
+Monitor::ExecResult Monitor::streamRemainingData(int fdesc, UploadManager &uploadManager, 
+                                                 std::size_t totalReceived, std::size_t totalContentLength) {
+    char buffer[UPLOAD_BUFFER_SIZE];
+    Logger logger(std::cout, true);
+
+    while (totalReceived < totalContentLength) {
+        ssize_t bytesRead = recv(fdesc, buffer, UPLOAD_BUFFER_SIZE, 0);
+        if (bytesRead <= 0) {
+            if (bytesRead == 0) {
+                logger.warn() << "Connection closed during large upload (received " << totalReceived
+                              << "/" << totalContentLength << " bytes)";
+                uploadManager.cleanup();
+                this->closePollFd(fdesc);
+                return Monitor::EXEC_SUCCESS;
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                pollfd pfd;
+                pfd.fd = fdesc;
+                pfd.events = POLLIN;
+                pfd.revents = 0;
+
+                int pollResult = poll(&pfd, 1, POLL_TIMEOUT_MS);
+                if (pollResult <= 0) {
+                    if (pollResult == 0) {
+                        logger.warn() << "Timeout waiting for upload data";
+                    } else {
+                        logger.error() << "Poll error during large upload: " << strerror(errno);
+                    }
+                    uploadManager.cleanup();
+                    this->closePollFd(fdesc);
+                    return Monitor::EXEC_SUCCESS;
+                }
+                continue;
+            }
+            
+            logger.error() << "Error reading large upload data: " << strerror(errno)
+                           << " (errno=" << errno << ")";
+            uploadManager.cleanup();
+            this->closePollFd(fdesc);
+            return Monitor::EXEC_SUCCESS;
+        }
+
+        std::size_t bytesToWrite = static_cast<std::size_t>(bytesRead);
+        if (totalReceived + bytesToWrite > totalContentLength) {
+            bytesToWrite = totalContentLength - totalReceived;
+        }
+
+        if (!uploadManager.writeChunk(buffer, bytesToWrite)) {
+            logger.error() << "Failed to write chunk to disk during large upload";
+            uploadManager.cleanup();
+            this->closePollFd(fdesc);
+            return Monitor::EXEC_SUCCESS;
+        }
+
+        totalReceived += bytesToWrite;
+    }
+    
+    return Monitor::EXEC_SUCCESS;
+}
+
+std::size_t Monitor::extractContentLength(const std::string &rawRequest, std::size_t contentLengthPos) {
+    std::size_t valueStart = contentLengthPos + CONTENT_LENGTH_HEADER;
+    std::size_t lineEnd = rawRequest.find("\r\n", valueStart);
+    
+    if (lineEnd == std::string::npos) {
+        return 0;
+    }
+
+    std::string lengthStr = rawRequest.substr(valueStart, lineEnd - valueStart);
+    
+    while (!lengthStr.empty() && lengthStr[0] == ' ') {
+        lengthStr = lengthStr.substr(1);
+    }
+    while (!lengthStr.empty() && lengthStr[lengthStr.length() - 1] == ' ') {
+        lengthStr = lengthStr.substr(0, lengthStr.length() - 1);
+    }
+
+    return static_cast<std::size_t>(std::atoi(lengthStr.c_str()));
+}
+
+HttpResponse Monitor::generateHttpResponse(const HttpRequest &httpRequest, int fdesc) {
+    if (httpRequest.isValid()) {
+        int serverPort = this->getPortForConnection(fdesc);
+        if (serverPort < 0) {
+            if (!this->servers.empty() && !this->servers[0].listens.empty()) {
+                serverPort = this->servers[0].listens[0].second;
+            } else {
+                serverPort = DEFAULT_SERVER_PORT;
+            }
+        }
+
+        return this->httpServer->processRequest(httpRequest, serverPort);
+    }
+    
+    logger.warn() << "Invalid HTTP request received";
+    return HttpResponse::createBadRequest();
+}
+
+void Monitor::sendHttpResponse(int fdesc, const HttpResponse &httpResponse) {
+    std::string responseString = httpResponse.toString();
+    send(fdesc, responseString.c_str(), responseString.size(), 0);
 }
