@@ -343,7 +343,8 @@ HttpResponse HttpServer::handlePOST(const HttpRequest& request, const Config::Se
         if (success) {
             std::ostringstream responseBody;
             responseBody << "<h1>Upload Successful!</h1><p>File saved as: " << filename
-                         << "</p><p>Size: " << fileSize << " bytes</p>" << "<p>Type: "
+                         << "</p><p>Size: " << fileSize << " bytes</p>"
+                         << "<p>Type: "
                          << (isLargeUpload ? "Large file (streamed to disk)"
                                            : "Small file (in memory)")
                          << "</p>";
