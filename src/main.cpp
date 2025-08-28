@@ -19,10 +19,10 @@
 #include "Logger.hpp"
 #include "Monitor.hpp"
 
-static int execMonitor(std::vector<Config::Server> servers, Logger& logger) {
+static int execMonitor(const Config& config, Logger& logger) {
     Monitor monitor(logger);
 
-    if (monitor.init(servers) < 0) {
+    if (monitor.init(config) < 0) {
         return (-1);
     }
     monitor.beginLoop();
@@ -58,7 +58,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    execMonitor(config.getServers(), logger);
+    execMonitor(config, logger);
 
     file.close();
 
