@@ -80,7 +80,7 @@ Monitor::ExecResult Monitor::eventExecConnection(const int fdesc, int &ready) {
 
 Monitor::ExecResult Monitor::eventExecRequest(const int fdesc, int &ready) {
     std::string rawRequest = readHttpRequest(fdesc);
-    
+
     return processHttpRequest(fdesc, rawRequest, ready);
 }
 
@@ -113,8 +113,9 @@ Monitor::ExecResult Monitor::handleLargeUpload(const int fdesc, const std::strin
 
     // Continue reading remaining body data and stream to disk
     std::size_t totalReceived = alreadyReceived;
-    
-    ExecResult streamResult = streamRemainingData(fdesc, uploadManager, totalReceived, uploadInfo.totalContentLength);
+
+    ExecResult streamResult =
+        streamRemainingData(fdesc, uploadManager, totalReceived, uploadInfo.totalContentLength);
     if (streamResult != Monitor::EXEC_SUCCESS) {
         return streamResult;
     }
@@ -190,34 +191,36 @@ std::string Monitor::readHttpRequest(int fdesc) {
         if (headerEndPos != std::string::npos) {
             std::size_t totalContentLength;
             std::string fullRequest = rawRequest;
-            if (processContentLength(rawRequest, headerEndPos, totalContentLength, fullRequest, fdesc)) {
+            if (processContentLength(rawRequest, headerEndPos, totalContentLength, fullRequest,
+                                     fdesc)) {
                 return fullRequest;
             }
             break;
         }
     }
-    
+
     return rawRequest;
 }
 
 bool Monitor::processContentLength(const std::string &rawRequest, std::size_t headerEndPos,
-                                   std::size_t &totalContentLength, std::string &fullRequest, int fdesc) {
+                                   std::size_t &totalContentLength, std::string &fullRequest,
+                                   int fdesc) {
     std::string headersSection = rawRequest.substr(0, headerEndPos);
     std::size_t contentLengthPos = headersSection.find("Content-Length:");
-    
+
     if (contentLengthPos == std::string::npos) {
         return false;
     }
 
     std::size_t valueStart = contentLengthPos + CONTENT_LENGTH_HEADER;
     std::size_t lineEnd = headersSection.find("\r\n", valueStart);
-    
+
     if (lineEnd == std::string::npos) {
         return false;
     }
 
     std::string lengthStr = headersSection.substr(valueStart, lineEnd - valueStart);
-    
+
     while (!lengthStr.empty() && lengthStr[0] == ' ') {
         lengthStr = lengthStr.substr(1);
     }
@@ -232,7 +235,7 @@ bool Monitor::processContentLength(const std::string &rawRequest, std::size_t he
     if (currentBodySize < totalContentLength) {
         char        buffer[BUFFER_SIZE + 1];
         std::string completeRequest = rawRequest;
-        
+
         while (currentBodySize < totalContentLength) {
             ssize_t moreBytesRead = recv(fdesc, buffer, BUFFER_SIZE, 0);
             if (moreBytesRead <= 0) {
@@ -249,11 +252,12 @@ bool Monitor::processContentLength(const std::string &rawRequest, std::size_t he
         }
         fullRequest = completeRequest;
     }
-    
+
     return true;
 }
 
-Monitor::ExecResult Monitor::processHttpRequest(int fdesc, const std::string &rawRequest, int &ready) {
+Monitor::ExecResult Monitor::processHttpRequest(int fdesc, const std::string &rawRequest,
+                                                int &ready) {
     // Check for large upload first
     std::size_t headerEndPos = rawRequest.find("\r\n\r\n");
     if (headerEndPos != std::string::npos) {
@@ -264,8 +268,8 @@ Monitor::ExecResult Monitor::processHttpRequest(int fdesc, const std::string &ra
                 logger.info() << "Large upload detected (" << contentLength
                               << " bytes), using streaming to disk";
                 Monitor::HeaderPosition headerPos(headerEndPos);
-                Monitor::ContentLength contentLen(contentLength);
-                UploadInfo uploadInfo(headerPos, contentLen);
+                Monitor::ContentLength  contentLen(contentLength);
+                UploadInfo              uploadInfo(headerPos, contentLen);
                 return handleLargeUpload(fdesc, rawRequest, uploadInfo, ready);
             }
         }
@@ -283,9 +287,10 @@ Monitor::ExecResult Monitor::processHttpRequest(int fdesc, const std::string &ra
     return Monitor::EXEC_SUCCESS;
 }
 
-Monitor::ExecResult Monitor::streamRemainingData(int fdesc, UploadManager &uploadManager, 
-                                                 std::size_t totalReceived, std::size_t totalContentLength) {
-    char buffer[UPLOAD_BUFFER_SIZE];
+Monitor::ExecResult Monitor::streamRemainingData(int fdesc, UploadManager &uploadManager,
+                                                 std::size_t totalReceived,
+                                                 std::size_t totalContentLength) {
+    char   buffer[UPLOAD_BUFFER_SIZE];
     Logger logger(std::cout, true);
 
     while (totalReceived < totalContentLength) {
@@ -317,7 +322,7 @@ Monitor::ExecResult Monitor::streamRemainingData(int fdesc, UploadManager &uploa
                 }
                 continue;
             }
-            
+
             logger.error() << "Error reading large upload data: " << strerror(errno)
                            << " (errno=" << errno << ")";
             uploadManager.cleanup();
@@ -339,20 +344,21 @@ Monitor::ExecResult Monitor::streamRemainingData(int fdesc, UploadManager &uploa
 
         totalReceived += bytesToWrite;
     }
-    
+
     return Monitor::EXEC_SUCCESS;
 }
 
-std::size_t Monitor::extractContentLength(const std::string &rawRequest, std::size_t contentLengthPos) {
+std::size_t Monitor::extractContentLength(const std::string &rawRequest,
+                                          std::size_t        contentLengthPos) {
     std::size_t valueStart = contentLengthPos + CONTENT_LENGTH_HEADER;
     std::size_t lineEnd = rawRequest.find("\r\n", valueStart);
-    
+
     if (lineEnd == std::string::npos) {
         return 0;
     }
 
     std::string lengthStr = rawRequest.substr(valueStart, lineEnd - valueStart);
-    
+
     while (!lengthStr.empty() && lengthStr[0] == ' ') {
         lengthStr = lengthStr.substr(1);
     }
@@ -376,7 +382,7 @@ HttpResponse Monitor::generateHttpResponse(const HttpRequest &httpRequest, int f
 
         return this->httpServer->processRequest(httpRequest, serverPort);
     }
-    
+
     logger.warn() << "Invalid HTTP request received";
     return HttpResponse::createBadRequest();
 }

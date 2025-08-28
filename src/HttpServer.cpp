@@ -89,7 +89,7 @@ HttpResponse HttpServer::processRequest(const HttpRequest& request, int serverPo
     if (method == "HEAD") {
         return handleHEAD(request, *server);
     }
-    
+
     m_Logger.warn() << "Method not allowed: " << method;
     return createErrorResponse(HTTP_METHOD_NOT_ALLOWED, *server);
 }
@@ -193,7 +193,7 @@ HttpResponse HttpServer::handlePOST(const HttpRequest& request, const Config::Se
 
     // Check if this is a CGI script request
     std::string cleanPath = requestPath;
-    size_t queryPos = cleanPath.find('?');
+    size_t      queryPos = cleanPath.find('?');
     if (queryPos != std::string::npos) {
         cleanPath = cleanPath.substr(0, queryPos);
     }
@@ -215,8 +215,10 @@ HttpResponse HttpServer::handlePOST(const HttpRequest& request, const Config::Se
 }
 
 // Helper method to validate POST request parameters
-HttpResponse HttpServer::validatePOSTRequest(const HttpRequest& request, const Config::Server& server,
-                                             const Config::Location* location, const std::string& requestPath) {
+HttpResponse HttpServer::validatePOSTRequest(const HttpRequest&      request,
+                                             const Config::Server&   server,
+                                             const Config::Location* location,
+                                             const std::string&      requestPath) {
     // Check if method is allowed for this location
     if ((location != 0) && !isMethodAllowed("POST", *location)) {
         m_Logger.warn() << "POST method not allowed for path: " << requestPath;
@@ -236,7 +238,8 @@ HttpResponse HttpServer::validatePOSTRequest(const HttpRequest& request, const C
 }
 
 // Helper method to determine document root for POST requests
-std::string HttpServer::determinePOSTDocumentRoot(const Config::Location* location, const Config::Server& server) {
+std::string HttpServer::determinePOSTDocumentRoot(const Config::Location* location,
+                                                  const Config::Server&   server) {
     std::string documentRoot;
     if ((location != 0) && !location->root.empty()) {
         documentRoot = location->root;
@@ -250,11 +253,13 @@ std::string HttpServer::determinePOSTDocumentRoot(const Config::Location* locati
 }
 
 // Helper method to process large file uploads
-bool HttpServer::processLargeFileUpload(const HttpRequest& request, const std::string& filename, std::size_t& fileSize) {
+bool HttpServer::processLargeFileUpload(const HttpRequest& request, const std::string& filename,
+                                        std::size_t& fileSize) {
     // Check if temp file exists before rename
     std::ifstream tempCheck(request.getTempFilePath().c_str());
     if (!tempCheck.good()) {
-        m_Logger.error() << "Temp file does not exist or is not readable: " << request.getTempFilePath();
+        m_Logger.error() << "Temp file does not exist or is not readable: "
+                         << request.getTempFilePath();
         return false;
     }
     tempCheck.close();
@@ -267,11 +272,11 @@ bool HttpServer::processLargeFileUpload(const HttpRequest& request, const std::s
             fileSize = static_cast<std::size_t>(file.tellg());
             file.close();
         }
-        m_Logger.info() << "Large file moved successfully from " << request.getTempFilePath() 
+        m_Logger.info() << "Large file moved successfully from " << request.getTempFilePath()
                         << " to " << filename << " (" << fileSize << " bytes)";
         return true;
     }
-    
+
     if (errno == EXDEV) {
         // Cross-device link error: copy and delete instead of rename
         std::ifstream source(request.getTempFilePath().c_str(), std::ios::binary);
@@ -290,10 +295,12 @@ bool HttpServer::processLargeFileUpload(const HttpRequest& request, const std::s
 
                     // Delete original temp file
                     if (unlink(request.getTempFilePath().c_str()) == 0) {
-                        m_Logger.info() << "Large file copied successfully from " << request.getTempFilePath() 
-                                        << " to " << filename << " (" << fileSize << " bytes)";
+                        m_Logger.info()
+                            << "Large file copied successfully from " << request.getTempFilePath()
+                            << " to " << filename << " (" << fileSize << " bytes)";
                     } else {
-                        m_Logger.warn() << "File copied but failed to delete temp file: " << request.getTempFilePath();
+                        m_Logger.warn() << "File copied but failed to delete temp file: "
+                                        << request.getTempFilePath();
                     }
                     return true;
                 }
@@ -303,17 +310,20 @@ bool HttpServer::processLargeFileUpload(const HttpRequest& request, const std::s
                 m_Logger.error() << "Failed to open destination file for writing: " << filename;
             }
         } else {
-            m_Logger.error() << "Failed to open temp file for reading: " << request.getTempFilePath();
+            m_Logger.error() << "Failed to open temp file for reading: "
+                             << request.getTempFilePath();
         }
     } else {
-        m_Logger.error() << "Failed to move large upload from " << request.getTempFilePath() 
-                         << " to " << filename << " (errno: " << errno << " - " << strerror(errno) << ")";
+        m_Logger.error() << "Failed to move large upload from " << request.getTempFilePath()
+                         << " to " << filename << " (errno: " << errno << " - " << strerror(errno)
+                         << ")";
     }
     return false;
 }
 
 // Helper method to process regular file uploads
-bool HttpServer::processRegularFileUpload(const HttpRequest& request, const std::string& filename, std::size_t& fileSize) {
+bool HttpServer::processRegularFileUpload(const HttpRequest& request, const std::string& filename,
+                                          std::size_t& fileSize) {
     const std::string& body = request.getBody();
     if (body.empty()) {
         m_Logger.warn() << "Empty upload request body";
@@ -325,14 +335,16 @@ bool HttpServer::processRegularFileUpload(const HttpRequest& request, const std:
         outFile << body;
         outFile.close();
         fileSize = body.length();
-        m_Logger.info() << "Small file uploaded successfully: " << filename << " (" << fileSize << " bytes)";
+        m_Logger.info() << "Small file uploaded successfully: " << filename << " (" << fileSize
+                        << " bytes)";
         return true;
     }
     return false;
 }
 
 // Helper method to handle file upload logic
-HttpResponse HttpServer::handleFileUpload(const HttpRequest& request, const Config::Server& server, const std::string& requestPath) {
+HttpResponse HttpServer::handleFileUpload(const HttpRequest& request, const Config::Server& server,
+                                          const std::string& requestPath) {
     if (requestPath != "/upload") {
         // Default POST response for non-upload requests
         HttpResponse response(HTTP_OK, m_Logger);
@@ -342,7 +354,7 @@ HttpResponse HttpServer::handleFileUpload(const HttpRequest& request, const Conf
     }
 
     bool isLargeUpload = request.hasLargeUpload();
-    
+
     // Validate request body for regular uploads
     if (!isLargeUpload && request.getBody().empty()) {
         m_Logger.warn() << "Empty upload request body";
@@ -359,7 +371,7 @@ HttpResponse HttpServer::handleFileUpload(const HttpRequest& request, const Conf
     }
     std::string filename = oss.str();
 
-    bool success = false;
+    bool        success = false;
     std::size_t fileSize = 0;
 
     if (isLargeUpload) {
@@ -434,7 +446,7 @@ HttpResponse HttpServer::handleDELETE(const HttpRequest& request, const Config::
             response.setBody("<h1>Delete Successful!</h1><p>File deleted: " + requestPath + "</p>");
             return response;
         }
-        
+
         m_Logger.error() << "Failed to delete file: " << filePath;
         return createErrorResponse(HTTP_INTERNAL_ERROR, server);
     }
@@ -472,7 +484,7 @@ HttpResponse HttpServer::handleHEAD(const HttpRequest& request, const Config::Se
 
     if (S_ISREG(fileStat.st_mode)) {
         HttpResponse response(HTTP_OK, m_Logger);
-        
+
         // Determine content type and set headers
         std::string contentType = determineContentTypeFromPath(filePath);
         response.setHeader("Content-Type", contentType);
@@ -483,19 +495,21 @@ HttpResponse HttpServer::handleHEAD(const HttpRequest& request, const Config::Se
 
         return response;
     }
-    
+
     if (S_ISDIR(fileStat.st_mode)) {
         HttpResponse response(HTTP_OK, m_Logger);
         response.setHeader("Content-Type", "text/html");
         return response;
     }
-    
+
     return createErrorResponse(HTTP_FORBIDDEN, server);
 }
 
 // Helper method to validate HEAD request parameters
-HttpResponse HttpServer::validateHEADRequest(const HttpRequest& /* request */, const Config::Server& server,
-                                             const Config::Location* location, const std::string& requestPath) {
+HttpResponse HttpServer::validateHEADRequest(const HttpRequest& /* request */,
+                                             const Config::Server&   server,
+                                             const Config::Location* location,
+                                             const std::string&      requestPath) {
     if (!isPathSafe(requestPath)) {
         m_Logger.warn() << "Unsafe path detected: " << requestPath;
         return createErrorResponse(HTTP_FORBIDDEN, server);
@@ -512,8 +526,9 @@ HttpResponse HttpServer::validateHEADRequest(const HttpRequest& /* request */, c
 }
 
 // Helper method to determine document root and index file for HEAD requests
-std::string HttpServer::determineHEADDocumentRoot(const Config::Location* location, const Config::Server& server,
-                                                  std::string& indexFile) {
+std::string HttpServer::determineHEADDocumentRoot(const Config::Location* location,
+                                                  const Config::Server&   server,
+                                                  std::string&            indexFile) {
     std::string documentRoot;
     indexFile = "index.html";
 
@@ -551,7 +566,8 @@ std::string HttpServer::determineHEADDocumentRoot(const Config::Location* locati
 }
 
 // Helper method to construct and validate file path for HEAD requests
-std::string HttpServer::constructHEADFilePath(const std::string& documentRoot, const std::string& requestPath,
+std::string HttpServer::constructHEADFilePath(const std::string& documentRoot,
+                                              const std::string& requestPath,
                                               const std::string& indexFile) {
     // Validate path lengths before concatenation
     if (documentRoot.length() + requestPath.length() > MAX_PATH_LENGTH) {
@@ -583,7 +599,7 @@ std::string HttpServer::constructHEADFilePath(const std::string& documentRoot, c
 std::string HttpServer::determineContentTypeFromPath(const std::string& filePath) {
     std::string contentType = "application/octet-stream";
     std::size_t dotPos = filePath.find_last_of('.');
-    
+
     if (dotPos != std::string::npos) {
         std::string extension = filePath.substr(dotPos);
         if (extension == ".html" || extension == ".htm") {
@@ -600,7 +616,7 @@ std::string HttpServer::determineContentTypeFromPath(const std::string& filePath
             contentType = "image/png";
         }
     }
-    
+
     return contentType;
 }
 
@@ -667,23 +683,24 @@ HttpResponse HttpServer::generateDirectoryListing(const std::string&    dirPath,
     // Collect directory entries using helper method
     std::vector<std::string> directories;
     std::vector<std::string> files;
-    
+
     if (!collectDirectoryEntries(dirPath, directories, files)) {
         return createErrorResponse(HTTP_FORBIDDEN, server);
     }
 
     // Generate complete HTML using helper method
-    std::string htmlContent = generateDirectoryHTML(RequestPath(requestPath), DirPath(dirPath), 
+    std::string htmlContent = generateDirectoryHTML(RequestPath(requestPath), DirPath(dirPath),
                                                     DirectoryList(directories), FileList(files));
     response.setBody(htmlContent);
-    
+
     m_Logger.info() << "Generated directory listing for: " << requestPath << " ("
                     << directories.size() << " dirs, " << files.size() << " files)";
     return response;
 }
 
 // Helper method to collect directory entries
-bool HttpServer::collectDirectoryEntries(const std::string& dirPath, std::vector<std::string>& directories,
+bool HttpServer::collectDirectoryEntries(const std::string&        dirPath,
+                                         std::vector<std::string>& directories,
                                          std::vector<std::string>& files) {
     DIR* dir = opendir(dirPath.c_str());
     if (dir == 0) {
@@ -717,7 +734,7 @@ bool HttpServer::collectDirectoryEntries(const std::string& dirPath, std::vector
     // Sort entries alphabetically
     std::sort(directories.begin(), directories.end());
     std::sort(files.begin(), files.end());
-    
+
     return true;
 }
 
@@ -771,18 +788,20 @@ std::string HttpServer::generateParentDirectoryLink(const std::string& requestPa
             parentPath = "/";
         }
     }
-    
+
     std::ostringstream html;
     html << "<a href=\"" << parentPath << "\" class=\"directory\">[Parent Directory]</a>\n";
     return html.str();
 }
 
 // Helper method to generate directory entries
-std::string HttpServer::generateDirectoryEntries(const RequestPath& requestPath, const DirPath& dirPath,
+std::string HttpServer::generateDirectoryEntries(const RequestPath&   requestPath,
+                                                 const DirPath&       dirPath,
                                                  const DirectoryList& directories) {
     std::ostringstream html;
-    
-    for (std::vector<std::string>::const_iterator it = directories.value.begin(); it != directories.value.end(); ++it) {
+
+    for (std::vector<std::string>::const_iterator it = directories.value.begin();
+         it != directories.value.end(); ++it) {
         std::string linkPath = requestPath.value;
         if (linkPath[linkPath.length() - 1] != '/') {
             linkPath += "/";
@@ -796,9 +815,10 @@ std::string HttpServer::generateDirectoryEntries(const RequestPath& requestPath,
             sizeInfo = "<span class=\"size\">[DIR]</span>";
         }
 
-        html << "<a href=\"" << linkPath << "/\" class=\"directory\">" << *it << "/" << sizeInfo << "</a>\n";
+        html << "<a href=\"" << linkPath << "/\" class=\"directory\">" << *it << "/" << sizeInfo
+             << "</a>\n";
     }
-    
+
     return html.str();
 }
 
@@ -806,8 +826,9 @@ std::string HttpServer::generateDirectoryEntries(const RequestPath& requestPath,
 std::string HttpServer::generateFileEntries(const RequestPath& requestPath, const DirPath& dirPath,
                                             const FileList& files) {
     std::ostringstream html;
-    
-    for (std::vector<std::string>::const_iterator it = files.value.begin(); it != files.value.end(); ++it) {
+
+    for (std::vector<std::string>::const_iterator it = files.value.begin(); it != files.value.end();
+         ++it) {
         std::string linkPath = requestPath.value;
         if (linkPath[linkPath.length() - 1] != '/') {
             linkPath += "/";
@@ -823,21 +844,23 @@ std::string HttpServer::generateFileEntries(const RequestPath& requestPath, cons
 
         html << "<a href=\"" << linkPath << "\" class=\"file\">" << *it << sizeInfo << "</a>\n";
     }
-    
+
     return html.str();
 }
 
 // Helper method to generate complete directory HTML
-std::string HttpServer::generateDirectoryHTML(const RequestPath& requestPath, const DirPath& dirPath,
-                                              const DirectoryList& directories, const FileList& files) {
+std::string HttpServer::generateDirectoryHTML(const RequestPath&   requestPath,
+                                              const DirPath&       dirPath,
+                                              const DirectoryList& directories,
+                                              const FileList&      files) {
     std::ostringstream html;
-    
+
     html << generateHTMLHeader(requestPath.value);
     html << generateParentDirectoryLink(requestPath.value);
     html << generateDirectoryEntries(requestPath, dirPath, directories);
     html << generateFileEntries(requestPath, dirPath, files);
     html << "</body></html>";
-    
+
     return html.str();
 }
 
@@ -907,8 +930,7 @@ const Config::Location* HttpServer::findMatchingLocation(const Config::Server& s
     }
 }
 
-bool HttpServer::isMethodAllowed(const std::string&      method,
-                                 const Config::Location& location) {
+bool HttpServer::isMethodAllowed(const std::string& method, const Config::Location& location) {
     const std::set<std::string>& allowedMethods = location.allowMethods;
 
     if (allowedMethods.empty()) {
@@ -1143,7 +1165,7 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
             response.setBody(cgiOutput);
             return response;
         }
-        
+
         // CGI execution failed
         m_Logger.error() << "CGI execution failed with status: " << WEXITSTATUS(status);
         return createErrorResponse(HTTP_INTERNAL_ERROR, server);

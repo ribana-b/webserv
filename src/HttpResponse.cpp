@@ -11,7 +11,6 @@
 /* ************************************************************************** */
 
 #include "HttpResponse.hpp"
-#include "HttpServer.hpp"  // For HTTP status constants
 
 #include <sys/stat.h>  // For stat
 
@@ -20,6 +19,8 @@
 #include <iostream>  // For std::cout
 #include <sstream>   // For std::ostringstream
 #include <string>    // For std::string
+
+#include "HttpServer.hpp"  // For HTTP status constants
 
 /* @------------------------------------------------------------------------@ */
 /* |                        Constructor/Destructor                          | */
@@ -193,11 +194,12 @@ HttpResponse HttpResponse::createNotFound(const std::string& message) {
     HttpResponse response(HTTP_NOT_FOUND);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
 
-    std::string body = message.empty()
-                           ? "<!DOCTYPE html><html><head><title>HTTP_NOT_FOUND Not Found</title></head>"
-                             "<body><h1>HTTP_NOT_FOUND Not Found</h1><p>The requested resource was not "
-                             "found.</p></body></html>"
-                           : message;
+    std::string body =
+        message.empty()
+            ? "<!DOCTYPE html><html><head><title>HTTP_NOT_FOUND Not Found</title></head>"
+              "<body><h1>HTTP_NOT_FOUND Not Found</h1><p>The requested resource was not "
+              "found.</p></body></html>"
+            : message;
 
     response.setBody(body);
     return response;
@@ -207,12 +209,12 @@ HttpResponse HttpResponse::createInternalError(const std::string& message) {
     HttpResponse response(HTTP_INTERNAL_ERROR);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
 
-    std::string body =
-        message.empty()
-            ? "<!DOCTYPE html><html><head><title>HTTP_INTERNAL_ERROR Internal Server Error</title></head>"
-              "<body><h1>HTTP_INTERNAL_ERROR Internal Server Error</h1><p>The server encountered an "
-              "error.</p></body></html>"
-            : message;
+    std::string body = message.empty() ? "<!DOCTYPE html><html><head><title>HTTP_INTERNAL_ERROR "
+                                         "Internal Server Error</title></head>"
+                                         "<body><h1>HTTP_INTERNAL_ERROR Internal Server "
+                                         "Error</h1><p>The server encountered an "
+                                         "error.</p></body></html>"
+                                       : message;
 
     response.setBody(body);
     return response;
@@ -225,7 +227,8 @@ HttpResponse HttpResponse::createBadRequest(const std::string& message) {
     std::string body =
         message.empty()
             ? "<!DOCTYPE html><html><head><title>HTTP_BAD_REQUEST Bad Request</title></head>"
-              "<body><h1>HTTP_BAD_REQUEST Bad Request</h1><p>The request was malformed.</p></body></html>"
+              "<body><h1>HTTP_BAD_REQUEST Bad Request</h1><p>The request was "
+              "malformed.</p></body></html>"
             : message;
 
     response.setBody(body);
@@ -236,11 +239,13 @@ HttpResponse HttpResponse::createMethodNotAllowed(const std::string& message) {
     HttpResponse response(HTTP_METHOD_NOT_ALLOWED);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
 
-    std::string body =
-        message.empty() ? "<!DOCTYPE html><html><head><title>HTTP_METHOD_NOT_ALLOWED Method Not Allowed</title></head>"
-                          "<body><h1>HTTP_METHOD_NOT_ALLOWED Method Not Allowed</h1><p>The requested method is not "
-                          "allowed.</p></body></html>"
-                        : message;
+    std::string body = message.empty()
+                           ? "<!DOCTYPE html><html><head><title>HTTP_METHOD_NOT_ALLOWED Method Not "
+                             "Allowed</title></head>"
+                             "<body><h1>HTTP_METHOD_NOT_ALLOWED Method Not Allowed</h1><p>The "
+                             "requested method is not "
+                             "allowed.</p></body></html>"
+                           : message;
 
     response.setBody(body);
     return response;
@@ -292,7 +297,7 @@ std::string HttpResponse::getCurrentDateTime() {
 }
 
 std::string HttpResponse::toLowerCase(const std::string& str) {
-    const int upperToLowerOffset = 32;
+    const int   upperToLowerOffset = 32;
     std::string result = str;
     for (std::size_t i = 0; i < result.length(); ++i) {
         if (result[i] >= 'A' && result[i] <= 'Z') {

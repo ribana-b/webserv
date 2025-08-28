@@ -71,7 +71,7 @@ private:
     static std::string getDefaultStatusMessage(int statusCode);
     static std::string getCurrentDateTime();
     static std::string toLowerCase(const std::string& str);
-    void        setDefaultHeaders();
+    void               setDefaultHeaders();
     static std::string getContentType(const std::string& filePath);
 };
 

@@ -78,33 +78,34 @@ private:
         std::size_t value;
         explicit HeaderPosition(std::size_t pos) : value(pos) {}
     };
-    
+
     struct ContentLength {
         std::size_t value;
         explicit ContentLength(std::size_t len) : value(len) {}
     };
-    
+
     struct UploadInfo {
         std::size_t headerEndPos;
         std::size_t totalContentLength;
-        
-        UploadInfo(const HeaderPosition& headerPos, const ContentLength& contentLen) 
-            : headerEndPos(headerPos.value), totalContentLength(contentLen.value) {}
+
+        UploadInfo(const HeaderPosition &headerPos, const ContentLength &contentLen) :
+            headerEndPos(headerPos.value), totalContentLength(contentLen.value) {}
     };
-    
-    ExecResult handleLargeUpload(int fdesc, const std::string &rawRequest, 
+
+    ExecResult handleLargeUpload(int fdesc, const std::string &rawRequest,
                                  const UploadInfo &uploadInfo, int &ready);
-    
+
     // Helper methods to reduce cognitive complexity
-    std::string readHttpRequest(int fdesc);
-    bool        processContentLength(const std::string &rawRequest, std::size_t headerEndPos,
-                                     std::size_t &totalContentLength, std::string &fullRequest, int fdesc);
-    ExecResult  processHttpRequest(int fdesc, const std::string &rawRequest, int &ready);
-    ExecResult  streamRemainingData(int fdesc, UploadManager &uploadManager, std::size_t totalReceived,
-                                    std::size_t totalContentLength);
-    static std::size_t extractContentLength(const std::string &rawRequest, std::size_t contentLengthPos);
-    HttpResponse generateHttpResponse(const HttpRequest &httpRequest, int fdesc);
-    static void  sendHttpResponse(int fdesc, const HttpResponse &httpResponse);
+    std::string        readHttpRequest(int fdesc);
+    bool               processContentLength(const std::string &rawRequest, std::size_t headerEndPos,
+                                            std::size_t &totalContentLength, std::string &fullRequest, int fdesc);
+    ExecResult         processHttpRequest(int fdesc, const std::string &rawRequest, int &ready);
+    ExecResult         streamRemainingData(int fdesc, UploadManager &uploadManager,
+                                           std::size_t totalReceived, std::size_t totalContentLength);
+    static std::size_t extractContentLength(const std::string &rawRequest,
+                                            std::size_t        contentLengthPos);
+    HttpResponse       generateHttpResponse(const HttpRequest &httpRequest, int fdesc);
+    static void        sendHttpResponse(int fdesc, const HttpResponse &httpResponse);
 
 public:
     Monitor(const Logger &logger);

@@ -63,14 +63,15 @@ private:
 
     static std::string searchConfigFile(const char* programName);
 
-    void handleClosedContext(Server& server, Location& currentLocation, bool& inLocation);
+    void        handleClosedContext(Server& server, Location& currentLocation, bool& inLocation);
     static void handleListen(Server& server, std::istringstream& iss);
     static void handleRoot(Server& server, Location& currentLocation, bool& inLocation,
-                    std::istringstream& iss);
+                           std::istringstream& iss);
     static void handleErrorPage(Server& server, std::istringstream& iss);
-    static void handleLocation(Location& currentLocation, bool& inLocation, std::istringstream& iss);
+    static void handleLocation(Location& currentLocation, bool& inLocation,
+                               std::istringstream& iss);
     static void handleIndex(Server& server, Location& currentLocation, bool& inLocation,
-                     std::istringstream& iss);
+                            std::istringstream& iss);
     static void handleAutoindex(Location& currentLocation, std::istringstream& iss);
     static void handleAllowMethods(Location& currentLocation, std::istringstream& iss);
     static void handleClientMaxBodySize(Location& currentLocation, std::istringstream& iss);

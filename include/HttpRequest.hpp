@@ -64,9 +64,9 @@ private:
     bool                               m_IsValid;
     std::string                        m_TempFilePath;
 
-    bool        parseRequestLine(const std::string& line);
-    bool        parseHeaders(const std::string& headerSection);
-    bool        parseBody(const std::string& rawData, std::size_t headerEnd);
+    bool               parseRequestLine(const std::string& line);
+    bool               parseHeaders(const std::string& headerSection);
+    bool               parseBody(const std::string& rawData, std::size_t headerEnd);
     static std::string toLowerCase(const std::string& str);
     static std::string trimWhitespace(const std::string& str);
     static bool        isValidMethod(const std::string& method);

@@ -239,7 +239,7 @@ bool HttpRequest::parseBody(const std::string& rawData, std::size_t headerEnd) {
 }
 
 std::string HttpRequest::toLowerCase(const std::string& str) {
-    const int upperToLowerOffset = 32;
+    const int   upperToLowerOffset = 32;
     std::string result = str;
     for (std::size_t i = 0; i < result.length(); ++i) {
         if (result[i] >= 'A' && result[i] <= 'Z') {
