@@ -44,6 +44,7 @@
 /* @------------------------------------------------------------------------@ */
 
 #include <string>  // For std::string
+#include <sys/types.h>  // For off_t
 
 #include "Config.hpp"
 #include "HttpRequest.hpp"
@@ -106,9 +107,66 @@ private:
     static bool        isPathSafe(const std::string& path);
     static bool        isCGIFile(const std::string& filePath);
     std::string resolvePath(const std::string& requestPath, const Config::Location& location) const;
-    static std::string joinPath(const std::string& base, const std::string& path);
+    static std::string joinPath(const std::string& baseDir, const std::string& fileName);
 
     HttpResponse createErrorResponse(int statusCode, const Config::Server& server);
+    
+    // Helper methods to reduce cognitive complexity
+    HttpResponse validatePOSTRequest(const HttpRequest& request, const Config::Server& server, 
+                                     const Config::Location* location, const std::string& requestPath);
+    static std::string determinePOSTDocumentRoot(const Config::Location* location, const Config::Server& server);
+    HttpResponse handleFileUpload(const HttpRequest& request, const Config::Server& server, 
+                                  const std::string& requestPath);
+    bool processLargeFileUpload(const HttpRequest& request, const std::string& filename, 
+                                std::size_t& fileSize);
+    bool processRegularFileUpload(const HttpRequest& request, const std::string& filename, 
+                                  std::size_t& fileSize);
+    
+    // Helper methods for HEAD request processing
+    HttpResponse validateHEADRequest(const HttpRequest& request, const Config::Server& server,
+                                     const Config::Location* location, const std::string& requestPath);
+    std::string determineHEADDocumentRoot(const Config::Location* location, const Config::Server& server,
+                                          std::string& indexFile);
+    std::string constructHEADFilePath(const std::string& documentRoot, const std::string& requestPath,
+                                      const std::string& indexFile);
+    static std::string determineContentTypeFromPath(const std::string& filePath);
+    
+    // Helper methods for directory listing generation
+    bool collectDirectoryEntries(const std::string& dirPath, std::vector<std::string>& directories,
+                                 std::vector<std::string>& files);
+    static std::string generateDirectoryHTML(const std::string& requestPath, const std::string& dirPath,
+                                      const std::vector<std::string>& directories,
+                                      const std::vector<std::string>& files);
+    static std::string generateHTMLHeader(const std::string& requestPath);
+    static std::string generateParentDirectoryLink(const std::string& requestPath);
+    // Wrapper structs to avoid swappable parameters
+    struct RequestPath {
+        std::string value;
+        explicit RequestPath(const std::string& path) : value(path) {}
+    };
+    
+    struct DirPath {
+        std::string value;
+        explicit DirPath(const std::string& path) : value(path) {}
+    };
+    
+    struct DirectoryList {
+        std::vector<std::string> value;
+        explicit DirectoryList(const std::vector<std::string>& dirs) : value(dirs) {}
+    };
+    
+    struct FileList {
+        std::vector<std::string> value;
+        explicit FileList(const std::vector<std::string>& files) : value(files) {}
+    };
+    
+    static std::string generateDirectoryEntries(const RequestPath& requestPath, const DirPath& dirPath,
+                                         const DirectoryList& directories);
+    static std::string generateFileEntries(const RequestPath& requestPath, const DirPath& dirPath,
+                                    const FileList& files);
+    static std::string generateDirectoryHTML(const RequestPath& requestPath, const DirPath& dirPath,
+                                      const DirectoryList& directories, const FileList& files);
+    static std::string formatFileSize(off_t fileSize);
 };
 
 /* @------------------------------------------------------------------------@ */

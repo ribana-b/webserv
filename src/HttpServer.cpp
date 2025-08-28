@@ -185,6 +185,38 @@ HttpResponse HttpServer::handlePOST(const HttpRequest& request, const Config::Se
     // Find matching location for this request
     const Config::Location* location = findMatchingLocation(server, requestPath);
 
+    // Validate POST request parameters
+    HttpResponse validationResponse = validatePOSTRequest(request, server, location, requestPath);
+    if (validationResponse.getStatusCode() != HTTP_OK) {
+        return validationResponse;
+    }
+
+    // Check if this is a CGI script request
+    std::string cleanPath = requestPath;
+    size_t queryPos = cleanPath.find('?');
+    if (queryPos != std::string::npos) {
+        cleanPath = cleanPath.substr(0, queryPos);
+    }
+
+    // Determine document root and construct file path for CGI check
+    std::string documentRoot = determinePOSTDocumentRoot(location, server);
+    std::string filePath = documentRoot + cleanPath;
+
+    // If it's a CGI file, handle it as CGI instead of upload
+    if (isCGIFile(filePath)) {
+        struct stat fileStat;
+        if (stat(filePath.c_str(), &fileStat) == 0 && S_ISREG(fileStat.st_mode)) {
+            return handleCGI(request, server, filePath);
+        }
+    }
+
+    // Handle file upload or regular POST processing
+    return handleFileUpload(request, server, requestPath);
+}
+
+// Helper method to validate POST request parameters
+HttpResponse HttpServer::validatePOSTRequest(const HttpRequest& request, const Config::Server& server,
+                                             const Config::Location* location, const std::string& requestPath) {
     // Check if method is allowed for this location
     if ((location != 0) && !isMethodAllowed("POST", *location)) {
         m_Logger.warn() << "POST method not allowed for path: " << requestPath;
@@ -199,14 +231,12 @@ HttpResponse HttpServer::handlePOST(const HttpRequest& request, const Config::Se
         return createErrorResponse(HTTP_PAYLOAD_TOO_LARGE, server);
     }
 
-    // Check if this is a CGI script request
-    std::string cleanPath = requestPath;
-    size_t      queryPos = cleanPath.find('?');
-    if (queryPos != std::string::npos) {
-        cleanPath = cleanPath.substr(0, queryPos);
-    }
+    // Return empty response if validation passes (we'll use isEmpty check)
+    return HttpResponse();
+}
 
-    // Determine document root
+// Helper method to determine document root for POST requests
+std::string HttpServer::determinePOSTDocumentRoot(const Config::Location* location, const Config::Server& server) {
     std::string documentRoot;
     if ((location != 0) && !location->root.empty()) {
         documentRoot = location->root;
@@ -216,156 +246,144 @@ HttpResponse HttpServer::handlePOST(const HttpRequest& request, const Config::Se
     if (documentRoot.empty()) {
         documentRoot = "./html";
     }
+    return documentRoot;
+}
 
-    // Construct file path for CGI check
-    std::string filePath = documentRoot + cleanPath;
-
-    // If it's a CGI file, handle it as CGI instead of upload
-    if (isCGIFile(filePath)) {
-        struct stat fileStat;
-        if (stat(filePath.c_str(), &fileStat) == 0 && S_ISREG(fileStat.st_mode)) {
-            return handleCGI(request, server, filePath);
-        }
+// Helper method to process large file uploads
+bool HttpServer::processLargeFileUpload(const HttpRequest& request, const std::string& filename, std::size_t& fileSize) {
+    // Check if temp file exists before rename
+    std::ifstream tempCheck(request.getTempFilePath().c_str());
+    if (!tempCheck.good()) {
+        m_Logger.error() << "Temp file does not exist or is not readable: " << request.getTempFilePath();
+        return false;
     }
+    tempCheck.close();
 
-    // File upload implementation with support for large files
-    if (requestPath == "/upload") {
-        std::string body;
-        bool        isLargeUpload = false;
-
-        // Check if this is a large upload using temp file
-        if (request.hasLargeUpload()) {
-            isLargeUpload = true;
-            m_Logger.info() << "Processing large upload from temp file: "
-                            << request.getTempFilePath();
-            // For large uploads, we'll move the temp file instead of reading into memory
-        } else {
-            body = request.getBody();
-            if (body.empty()) {
-                m_Logger.warn() << "Empty upload request body";
-                return createErrorResponse(HTTP_BAD_REQUEST, server);
-            }
+    int renameResult = rename(request.getTempFilePath().c_str(), filename.c_str());
+    if (renameResult == 0) {
+        // Get file size for reporting
+        std::ifstream file(filename.c_str(), std::ios::binary | std::ios::ate);
+        if (file.is_open()) {
+            fileSize = static_cast<std::size_t>(file.tellg());
+            file.close();
         }
+        m_Logger.info() << "Large file moved successfully from " << request.getTempFilePath() 
+                        << " to " << filename << " (" << fileSize << " bytes)";
+        return true;
+    }
+    
+    if (errno == EXDEV) {
+        // Cross-device link error: copy and delete instead of rename
+        std::ifstream source(request.getTempFilePath().c_str(), std::ios::binary);
+        if (source.is_open()) {
+            std::ofstream dest(filename.c_str(), std::ios::binary);
+            if (dest.is_open()) {
+                dest << source.rdbuf();
+                source.close();
+                dest.close();
 
-        // Generate final filename
-        std::ostringstream oss;
-        oss << "./html/uploaded_" << time(NULL);
-        if (isLargeUpload) {
-            oss << "_large.bin";  // Use binary extension for large files
-        } else {
-            oss << ".txt";
-        }
-        std::string filename = oss.str();
+                // Verify copy was successful and get file size
+                std::ifstream verify(filename.c_str(), std::ios::binary | std::ios::ate);
+                if (verify.is_open()) {
+                    fileSize = static_cast<std::size_t>(verify.tellg());
+                    verify.close();
 
-        bool        success = false;
-        std::size_t fileSize = 0;
-
-        if (isLargeUpload) {
-            // Move temp file to final location
-
-            // Check if temp file exists before rename
-            std::ifstream tempCheck(request.getTempFilePath().c_str());
-            if (!tempCheck.good()) {
-                m_Logger.error() << "Temp file does not exist or is not readable: "
-                                 << request.getTempFilePath();
-            } else {
-                tempCheck.close();
-            }
-
-            int renameResult = rename(request.getTempFilePath().c_str(), filename.c_str());
-            if (renameResult == 0) {
-                success = true;
-                // Get file size for reporting
-                std::ifstream file(filename.c_str(), std::ios::binary | std::ios::ate);
-                if (file.is_open()) {
-                    fileSize = static_cast<std::size_t>(file.tellg());
-                    file.close();
-                }
-                m_Logger.info() << "Large file moved successfully from "
-                                << request.getTempFilePath() << " to " << filename << " ("
-                                << fileSize << " bytes)";
-            } else if (errno == EXDEV) {
-                // Cross-device link error: copy and delete instead of rename
-
-                std::ifstream source(request.getTempFilePath().c_str(), std::ios::binary);
-                if (source.is_open()) {
-                    std::ofstream dest(filename.c_str(), std::ios::binary);
-                    if (dest.is_open()) {
-                        dest << source.rdbuf();
-                        source.close();
-                        dest.close();
-
-                        // Verify copy was successful and get file size
-                        std::ifstream verify(filename.c_str(), std::ios::binary | std::ios::ate);
-                        if (verify.is_open()) {
-                            fileSize = static_cast<std::size_t>(verify.tellg());
-                            verify.close();
-
-                            // Delete original temp file
-                            if (unlink(request.getTempFilePath().c_str()) == 0) {
-                                success = true;
-                                m_Logger.info() << "Large file copied successfully from "
-                                                << request.getTempFilePath() << " to " << filename
-                                                << " (" << fileSize << " bytes)";
-                            } else {
-                                m_Logger.warn() << "File copied but failed to delete temp file: "
-                                                << request.getTempFilePath();
-                                success = true;  // Still consider it successful
-                            }
-                        } else {
-                            m_Logger.error() << "Failed to verify copied file: " << filename;
-                        }
+                    // Delete original temp file
+                    if (unlink(request.getTempFilePath().c_str()) == 0) {
+                        m_Logger.info() << "Large file copied successfully from " << request.getTempFilePath() 
+                                        << " to " << filename << " (" << fileSize << " bytes)";
                     } else {
-                        source.close();
-                        m_Logger.error()
-                            << "Failed to open destination file for writing: " << filename;
+                        m_Logger.warn() << "File copied but failed to delete temp file: " << request.getTempFilePath();
                     }
-                } else {
-                    m_Logger.error()
-                        << "Failed to open temp file for reading: " << request.getTempFilePath();
+                    return true;
                 }
+                m_Logger.error() << "Failed to verify copied file: " << filename;
             } else {
-                m_Logger.error() << "Failed to move large upload from " << request.getTempFilePath()
-                                 << " to " << filename << " (errno: " << errno << " - "
-                                 << strerror(errno) << ")";
+                source.close();
+                m_Logger.error() << "Failed to open destination file for writing: " << filename;
             }
         } else {
-            // Small file: write normally
-            std::ofstream outFile(filename.c_str(), std::ios::binary);
-            if (outFile.is_open()) {
-                outFile << body;
-                outFile.close();
-                success = true;
-                fileSize = body.length();
-                m_Logger.info() << "Small file uploaded successfully: " << filename << " ("
-                                << fileSize << " bytes)";
-            }
+            m_Logger.error() << "Failed to open temp file for reading: " << request.getTempFilePath();
         }
+    } else {
+        m_Logger.error() << "Failed to move large upload from " << request.getTempFilePath() 
+                         << " to " << filename << " (errno: " << errno << " - " << strerror(errno) << ")";
+    }
+    return false;
+}
 
-        if (success) {
-            std::ostringstream responseBody;
-            responseBody << "<h1>Upload Successful!</h1><p>File saved as: " << filename
-                         << "</p><p>Size: " << fileSize << " bytes</p>"
-                         << "<p>Type: "
-                         << (isLargeUpload ? "Large file (streamed to disk)"
-                                           : "Small file (in memory)")
-                         << "</p>";
-
-            HttpResponse response(HTTP_OK, m_Logger);
-            response.setHeader("Content-Type", "text/html");
-            response.setBody(responseBody.str());
-            return response;
-        }
-        
-        m_Logger.error() << "Failed to save uploaded file: " << filename;
-        return createErrorResponse(HTTP_INTERNAL_ERROR, server);
+// Helper method to process regular file uploads
+bool HttpServer::processRegularFileUpload(const HttpRequest& request, const std::string& filename, std::size_t& fileSize) {
+    const std::string& body = request.getBody();
+    if (body.empty()) {
+        m_Logger.warn() << "Empty upload request body";
+        return false;
     }
 
-    // Default POST response
-    HttpResponse response(HTTP_OK, m_Logger);
-    response.setHeader("Content-Type", "text/plain");
-    response.setBody("POST request processed successfully");
-    return response;
+    std::ofstream outFile(filename.c_str(), std::ios::binary);
+    if (outFile.is_open()) {
+        outFile << body;
+        outFile.close();
+        fileSize = body.length();
+        m_Logger.info() << "Small file uploaded successfully: " << filename << " (" << fileSize << " bytes)";
+        return true;
+    }
+    return false;
+}
+
+// Helper method to handle file upload logic
+HttpResponse HttpServer::handleFileUpload(const HttpRequest& request, const Config::Server& server, const std::string& requestPath) {
+    if (requestPath != "/upload") {
+        // Default POST response for non-upload requests
+        HttpResponse response(HTTP_OK, m_Logger);
+        response.setHeader("Content-Type", "text/plain");
+        response.setBody("POST request processed successfully");
+        return response;
+    }
+
+    bool isLargeUpload = request.hasLargeUpload();
+    
+    // Validate request body for regular uploads
+    if (!isLargeUpload && request.getBody().empty()) {
+        m_Logger.warn() << "Empty upload request body";
+        return createErrorResponse(HTTP_BAD_REQUEST, server);
+    }
+
+    // Generate final filename
+    std::ostringstream oss;
+    oss << "./html/uploaded_" << time(NULL);
+    if (isLargeUpload) {
+        oss << "_large.bin";  // Use binary extension for large files
+    } else {
+        oss << ".txt";
+    }
+    std::string filename = oss.str();
+
+    bool success = false;
+    std::size_t fileSize = 0;
+
+    if (isLargeUpload) {
+        m_Logger.info() << "Processing large upload from temp file: " << request.getTempFilePath();
+        success = processLargeFileUpload(request, filename, fileSize);
+    } else {
+        success = processRegularFileUpload(request, filename, fileSize);
+    }
+
+    if (success) {
+        std::ostringstream responseBody;
+        responseBody << "<h1>Upload Successful!</h1><p>File saved as: " << filename
+                     << "</p><p>Size: " << fileSize << " bytes</p><p>Type: "
+                     << (isLargeUpload ? "Large file (streamed to disk)" : "Small file (in memory)")
+                     << "</p>";
+
+        HttpResponse response(HTTP_OK, m_Logger);
+        response.setHeader("Content-Type", "text/html");
+        response.setBody(responseBody.str());
+        return response;
+    }
+
+    m_Logger.error() << "Failed to save uploaded file: " << filename;
+    return createErrorResponse(HTTP_INTERNAL_ERROR, server);
 }
 
 HttpResponse HttpServer::handleDELETE(const HttpRequest& request, const Config::Server& server) {
@@ -427,13 +445,61 @@ HttpResponse HttpServer::handleDELETE(const HttpRequest& request, const Config::
 HttpResponse HttpServer::handleHEAD(const HttpRequest& request, const Config::Server& server) {
     const std::string& requestPath = request.getPath();
 
+    // Find matching location for this request
+    const Config::Location* location = findMatchingLocation(server, requestPath);
+
+    // Validate HEAD request parameters
+    HttpResponse validationResponse = validateHEADRequest(request, server, location, requestPath);
+    if (validationResponse.getStatusCode() != HTTP_OK) {
+        return validationResponse;
+    }
+
+    // Determine document root and index file
+    std::string indexFile;
+    std::string documentRoot = determineHEADDocumentRoot(location, server, indexFile);
+
+    // Construct and validate file path
+    std::string filePath = constructHEADFilePath(documentRoot, requestPath, indexFile);
+    if (filePath.empty()) {
+        return createErrorResponse(HTTP_URI_TOO_LONG, server);
+    }
+
+    // Check if file exists and get stats
+    struct stat fileStat;
+    if (stat(filePath.c_str(), &fileStat) != 0) {
+        return createErrorResponse(HTTP_NOT_FOUND, server);
+    }
+
+    if (S_ISREG(fileStat.st_mode)) {
+        HttpResponse response(HTTP_OK, m_Logger);
+        
+        // Determine content type and set headers
+        std::string contentType = determineContentTypeFromPath(filePath);
+        response.setHeader("Content-Type", contentType);
+
+        std::ostringstream oss;
+        oss << fileStat.st_size;
+        response.setHeader("Content-Length", oss.str());
+
+        return response;
+    }
+    
+    if (S_ISDIR(fileStat.st_mode)) {
+        HttpResponse response(HTTP_OK, m_Logger);
+        response.setHeader("Content-Type", "text/html");
+        return response;
+    }
+    
+    return createErrorResponse(HTTP_FORBIDDEN, server);
+}
+
+// Helper method to validate HEAD request parameters
+HttpResponse HttpServer::validateHEADRequest(const HttpRequest& /* request */, const Config::Server& server,
+                                             const Config::Location* location, const std::string& requestPath) {
     if (!isPathSafe(requestPath)) {
         m_Logger.warn() << "Unsafe path detected: " << requestPath;
         return createErrorResponse(HTTP_FORBIDDEN, server);
     }
-
-    // Find matching location for this request
-    const Config::Location* location = findMatchingLocation(server, requestPath);
 
     // Check if method is allowed for this location
     if ((location != 0) && !isMethodAllowed("HEAD", *location)) {
@@ -441,9 +507,15 @@ HttpResponse HttpServer::handleHEAD(const HttpRequest& request, const Config::Se
         return createErrorResponse(HTTP_METHOD_NOT_ALLOWED, server);
     }
 
-    // Determine document root and index file
+    // Return empty response if validation passes
+    return HttpResponse();
+}
+
+// Helper method to determine document root and index file for HEAD requests
+std::string HttpServer::determineHEADDocumentRoot(const Config::Location* location, const Config::Server& server,
+                                                  std::string& indexFile) {
     std::string documentRoot;
-    std::string indexFile = "index.html";
+    indexFile = "index.html";
 
     if ((location != 0) && !location->root.empty()) {
         documentRoot = location->root;
@@ -466,7 +538,7 @@ HttpResponse HttpServer::handleHEAD(const HttpRequest& request, const Config::Se
         documentRoot = "./html";
     }
 
-    // Get index file from server config
+    // Validate index file from server config
     if (!server.index.empty()) {
         indexFile = server.index[0];
         if (indexFile.length() > MIN_PATH_LENGTH || indexFile.find("..") != std::string::npos) {
@@ -475,13 +547,18 @@ HttpResponse HttpServer::handleHEAD(const HttpRequest& request, const Config::Se
         }
     }
 
+    return documentRoot;
+}
+
+// Helper method to construct and validate file path for HEAD requests
+std::string HttpServer::constructHEADFilePath(const std::string& documentRoot, const std::string& requestPath,
+                                              const std::string& indexFile) {
     // Validate path lengths before concatenation
     if (documentRoot.length() + requestPath.length() > MAX_PATH_LENGTH) {
         m_Logger.error() << "HEAD: Combined path would be too long";
-        return createErrorResponse(HTTP_URI_TOO_LONG, server);
+        return "";
     }
 
-    // Safe path construction
     std::string filePath;
     try {
         if (requestPath == "/") {
@@ -492,57 +569,39 @@ HttpResponse HttpServer::handleHEAD(const HttpRequest& request, const Config::Se
 
         if (filePath.length() > MAX_FILE_SIZE_MB) {
             m_Logger.error() << "HEAD: Final filePath too long: " << filePath.length();
-            return createErrorResponse(HTTP_URI_TOO_LONG, server);
+            return "";
         }
-
     } catch (const std::exception& e) {
         m_Logger.error() << "HEAD: String concatenation failed: " << e.what();
-        return createErrorResponse(HTTP_INTERNAL_ERROR, server);
+        return "";
     }
 
-    struct stat fileStat;
-    if (stat(filePath.c_str(), &fileStat) != 0) {
-        return createErrorResponse(HTTP_NOT_FOUND, server);
-    }
+    return filePath;
+}
 
-    if (S_ISREG(fileStat.st_mode)) {
-        HttpResponse response(HTTP_OK, m_Logger);
-
-        // Simple MIME type detection
-        std::string contentType = "application/octet-stream";
-        std::size_t dotPos = filePath.find_last_of('.');
-        if (dotPos != std::string::npos) {
-            std::string extension = filePath.substr(dotPos);
-            if (extension == ".html" || extension == ".htm") {
-                contentType = "text/html; charset=utf-8";
-            } else if (extension == ".css") {
-                contentType = "text/css";
-            } else if (extension == ".js") {
-                contentType = "application/javascript";
-            } else if (extension == ".txt") {
-                contentType = "text/plain; charset=utf-8";
-            } else if (extension == ".jpg" || extension == ".jpeg") {
-                contentType = "image/jpeg";
-            } else if (extension == ".png") {
-                contentType = "image/png";
-            }
+// Helper method to determine content type from file path
+std::string HttpServer::determineContentTypeFromPath(const std::string& filePath) {
+    std::string contentType = "application/octet-stream";
+    std::size_t dotPos = filePath.find_last_of('.');
+    
+    if (dotPos != std::string::npos) {
+        std::string extension = filePath.substr(dotPos);
+        if (extension == ".html" || extension == ".htm") {
+            contentType = "text/html; charset=utf-8";
+        } else if (extension == ".css") {
+            contentType = "text/css";
+        } else if (extension == ".js") {
+            contentType = "application/javascript";
+        } else if (extension == ".txt") {
+            contentType = "text/plain; charset=utf-8";
+        } else if (extension == ".jpg" || extension == ".jpeg") {
+            contentType = "image/jpeg";
+        } else if (extension == ".png") {
+            contentType = "image/png";
         }
-
-        response.setHeader("Content-Type", contentType);
-
-        std::ostringstream oss;
-        oss << fileStat.st_size;
-        response.setHeader("Content-Length", oss.str());
-
-        return response;
-    }
-    if (S_ISDIR(fileStat.st_mode)) {
-        HttpResponse response(HTTP_OK, m_Logger);
-        response.setHeader("Content-Type", "text/html");
-        return response;
     }
     
-    return createErrorResponse(HTTP_FORBIDDEN, server);
+    return contentType;
 }
 
 HttpResponse HttpServer::serveStaticFile(const std::string&    filePath,
@@ -605,15 +664,32 @@ HttpResponse HttpServer::generateDirectoryListing(const std::string&    dirPath,
     HttpResponse response(HTTP_OK, m_Logger);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
 
-    DIR* dir = opendir(dirPath.c_str());
-    if (dir == 0) {
-        m_Logger.warn() << "Cannot open directory: " << dirPath;
+    // Collect directory entries using helper method
+    std::vector<std::string> directories;
+    std::vector<std::string> files;
+    
+    if (!collectDirectoryEntries(dirPath, directories, files)) {
         return createErrorResponse(HTTP_FORBIDDEN, server);
     }
 
-    // Collect directory entries
-    std::vector<std::string> directories;
-    std::vector<std::string> files;
+    // Generate complete HTML using helper method
+    std::string htmlContent = generateDirectoryHTML(RequestPath(requestPath), DirPath(dirPath), 
+                                                    DirectoryList(directories), FileList(files));
+    response.setBody(htmlContent);
+    
+    m_Logger.info() << "Generated directory listing for: " << requestPath << " ("
+                    << directories.size() << " dirs, " << files.size() << " files)";
+    return response;
+}
+
+// Helper method to collect directory entries
+bool HttpServer::collectDirectoryEntries(const std::string& dirPath, std::vector<std::string>& directories,
+                                         std::vector<std::string>& files) {
+    DIR* dir = opendir(dirPath.c_str());
+    if (dir == 0) {
+        m_Logger.warn() << "Cannot open directory: " << dirPath;
+        return false;
+    }
 
     struct dirent* entry;
     while ((entry = readdir(dir)) != NULL) {
@@ -624,6 +700,7 @@ HttpResponse HttpServer::generateDirectoryListing(const std::string&    dirPath,
             continue;
         }
 
+        // dirPath is the base directory, name is the file/directory name to append
         std::string fullPath = joinPath(dirPath, name);
         struct stat entryStat;
 
@@ -640,8 +717,25 @@ HttpResponse HttpServer::generateDirectoryListing(const std::string&    dirPath,
     // Sort entries alphabetically
     std::sort(directories.begin(), directories.end());
     std::sort(files.begin(), files.end());
+    
+    return true;
+}
 
-    // Generate HTML
+// Helper method to format file size for display
+std::string HttpServer::formatFileSize(off_t fileSize) {
+    std::ostringstream size;
+    if (fileSize < BYTES_PER_KB) {
+        size << fileSize << "B";
+    } else if (fileSize < static_cast<long>(BYTES_PER_KB) * BYTES_PER_KB) {
+        size << (fileSize / BYTES_PER_KB) << "KB";
+    } else {
+        size << (fileSize / (static_cast<long>(BYTES_PER_KB) * BYTES_PER_KB)) << "MB";
+    }
+    return size.str();
+}
+
+// Helper method to generate HTML header and styles
+std::string HttpServer::generateHTMLHeader(const std::string& requestPath) {
     std::ostringstream html;
     html << "<!DOCTYPE html>\n";
     html << "<html><head>\n";
@@ -657,75 +751,94 @@ HttpResponse HttpServer::generateDirectoryListing(const std::string&    dirPath,
     html << "</style>\n";
     html << "</head><body>\n";
     html << "<h1>Directory listing for " << requestPath << "</h1>\n";
+    return html.str();
+}
 
-    // Add parent directory link if not root
-    if (requestPath != "/") {
-        std::string parentPath = requestPath;
-        if (parentPath.length() > 1 && parentPath[parentPath.length() - 1] == '/') {
-            parentPath = parentPath.substr(0, parentPath.length() - 1);
-        }
-        std::size_t lastSlash = parentPath.rfind('/');
-        if (lastSlash != std::string::npos) {
-            parentPath = parentPath.substr(0, lastSlash);
-            if (parentPath.empty()) {
-                parentPath = "/";
-            }
-        }
-        html << "<a href=\"" << parentPath << "\" class=\"directory\">[Parent Directory]</a>\n";
+// Helper method to generate parent directory link
+std::string HttpServer::generateParentDirectoryLink(const std::string& requestPath) {
+    if (requestPath == "/") {
+        return "";
     }
 
-    // Add directories
-    for (std::vector<std::string>::const_iterator it = directories.begin(); it != directories.end();
-         ++it) {
-        std::string linkPath = requestPath;
+    std::string parentPath = requestPath;
+    if (parentPath.length() > 1 && parentPath[parentPath.length() - 1] == '/') {
+        parentPath = parentPath.substr(0, parentPath.length() - 1);
+    }
+    std::size_t lastSlash = parentPath.rfind('/');
+    if (lastSlash != std::string::npos) {
+        parentPath = parentPath.substr(0, lastSlash);
+        if (parentPath.empty()) {
+            parentPath = "/";
+        }
+    }
+    
+    std::ostringstream html;
+    html << "<a href=\"" << parentPath << "\" class=\"directory\">[Parent Directory]</a>\n";
+    return html.str();
+}
+
+// Helper method to generate directory entries
+std::string HttpServer::generateDirectoryEntries(const RequestPath& requestPath, const DirPath& dirPath,
+                                                 const DirectoryList& directories) {
+    std::ostringstream html;
+    
+    for (std::vector<std::string>::const_iterator it = directories.value.begin(); it != directories.value.end(); ++it) {
+        std::string linkPath = requestPath.value;
         if (linkPath[linkPath.length() - 1] != '/') {
             linkPath += "/";
         }
         linkPath += *it;
 
-        std::string fullPath = joinPath(dirPath, *it);
+        std::string fullPath = joinPath(dirPath.value, *it);
         struct stat entryStat;
         std::string sizeInfo;
         if (stat(fullPath.c_str(), &entryStat) == 0) {
             sizeInfo = "<span class=\"size\">[DIR]</span>";
         }
 
-        html << "<a href=\"" << linkPath << "/\" class=\"directory\">" << *it << "/" << sizeInfo
-             << "</a>\n";
+        html << "<a href=\"" << linkPath << "/\" class=\"directory\">" << *it << "/" << sizeInfo << "</a>\n";
     }
+    
+    return html.str();
+}
 
-    // Add files
-    for (std::vector<std::string>::const_iterator it = files.begin(); it != files.end(); ++it) {
-        std::string linkPath = requestPath;
+// Helper method to generate file entries
+std::string HttpServer::generateFileEntries(const RequestPath& requestPath, const DirPath& dirPath,
+                                            const FileList& files) {
+    std::ostringstream html;
+    
+    for (std::vector<std::string>::const_iterator it = files.value.begin(); it != files.value.end(); ++it) {
+        std::string linkPath = requestPath.value;
         if (linkPath[linkPath.length() - 1] != '/') {
             linkPath += "/";
         }
         linkPath += *it;
 
-        std::string fullPath = joinPath(dirPath, *it);
+        std::string fullPath = joinPath(dirPath.value, *it);
         struct stat entryStat;
         std::string sizeInfo;
         if (stat(fullPath.c_str(), &entryStat) == 0) {
-            std::ostringstream size;
-            if (entryStat.st_size < BYTES_PER_KB) {
-                size << entryStat.st_size << "B";
-            } else if (entryStat.st_size < static_cast<long>(BYTES_PER_KB) * BYTES_PER_KB) {
-                size << (entryStat.st_size / BYTES_PER_KB) << "KB";
-            } else {
-                size << (entryStat.st_size / (static_cast<long>(BYTES_PER_KB) * BYTES_PER_KB)) << "MB";
-            }
-            sizeInfo = "<span class=\"size\">" + size.str() + "</span>";
+            sizeInfo = "<span class=\"size\">" + formatFileSize(entryStat.st_size) + "</span>";
         }
 
         html << "<a href=\"" << linkPath << "\" class=\"file\">" << *it << sizeInfo << "</a>\n";
     }
+    
+    return html.str();
+}
 
+// Helper method to generate complete directory HTML
+std::string HttpServer::generateDirectoryHTML(const RequestPath& requestPath, const DirPath& dirPath,
+                                              const DirectoryList& directories, const FileList& files) {
+    std::ostringstream html;
+    
+    html << generateHTMLHeader(requestPath.value);
+    html << generateParentDirectoryLink(requestPath.value);
+    html << generateDirectoryEntries(requestPath, dirPath, directories);
+    html << generateFileEntries(requestPath, dirPath, files);
     html << "</body></html>";
-
-    response.setBody(html.str());
-    m_Logger.info() << "Generated directory listing for: " << requestPath << " ("
-                    << directories.size() << " dirs, " << files.size() << " files)";
-    return response;
+    
+    return html.str();
 }
 
 const Config::Server* HttpServer::findMatchingServer(int port) const {
@@ -845,22 +958,22 @@ std::string HttpServer::resolvePath(const std::string&      requestPath,
     return joinPath(basePath, requestPath);
 }
 
-std::string HttpServer::joinPath(const std::string& base, const std::string& path) {
-    if (base.empty()) {
-        return path;
+std::string HttpServer::joinPath(const std::string& baseDir, const std::string& fileName) {
+    if (baseDir.empty()) {
+        return fileName;
     }
-    if (path.empty()) {
-        return base;
+    if (fileName.empty()) {
+        return baseDir;
     }
 
-    std::string result = base;
-    if (result[result.length() - 1] != '/' && path[0] != '/') {
+    std::string result = baseDir;
+    if (result[result.length() - 1] != '/' && fileName[0] != '/') {
         result += '/';
-    } else if (result[result.length() - 1] == '/' && path[0] == '/') {
+    } else if (result[result.length() - 1] == '/' && fileName[0] == '/') {
         result = result.substr(0, result.length() - 1);
     }
 
-    result += path;
+    result += fileName;
     return result;
 }
 

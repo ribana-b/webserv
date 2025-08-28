@@ -263,7 +263,9 @@ Monitor::ExecResult Monitor::processHttpRequest(int fdesc, const std::string &ra
             if (UploadManager::isLargeFile(contentLength)) {
                 logger.info() << "Large upload detected (" << contentLength
                               << " bytes), using streaming to disk";
-                UploadInfo uploadInfo(headerEndPos, contentLength);
+                Monitor::HeaderPosition headerPos(headerEndPos);
+                Monitor::ContentLength contentLen(contentLength);
+                UploadInfo uploadInfo(headerPos, contentLen);
                 return handleLargeUpload(fdesc, rawRequest, uploadInfo, ready);
             }
         }
