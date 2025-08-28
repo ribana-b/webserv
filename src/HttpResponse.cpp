@@ -11,6 +11,7 @@
 /* ************************************************************************** */
 
 #include "HttpResponse.hpp"
+#include "HttpServer.hpp"  // For HTTP status constants
 
 #include <sys/stat.h>  // For stat
 
@@ -24,8 +25,8 @@
 /* |                        Constructor/Destructor                          | */
 /* @------------------------------------------------------------------------@ */
 
-HttpResponse::HttpResponse() : m_Logger(std::cout, false), m_StatusCode(200) {
-    m_StatusMessage = getDefaultStatusMessage(200);
+HttpResponse::HttpResponse() : m_Logger(std::cout, false), m_StatusCode(HTTP_OK) {
+    m_StatusMessage = getDefaultStatusMessage(HTTP_OK);
     setDefaultHeaders();
 }
 
@@ -39,8 +40,8 @@ HttpResponse::HttpResponse(int statusCode, const std::string& statusMessage) :
     setDefaultHeaders();
 }
 
-HttpResponse::HttpResponse(const Logger& logger) : m_Logger(logger), m_StatusCode(200) {
-    m_StatusMessage = getDefaultStatusMessage(200);
+HttpResponse::HttpResponse(const Logger& logger) : m_Logger(logger), m_StatusCode(HTTP_OK) {
+    m_StatusMessage = getDefaultStatusMessage(HTTP_OK);
     setDefaultHeaders();
 }
 
@@ -100,7 +101,7 @@ void HttpResponse::setBodyFromFile(const std::string& filePath) {
     std::ifstream file(filePath.c_str());
     if (!file.is_open()) {
         m_Logger.error() << "Could not open file: " << filePath;
-        setStatus(500, "Internal Server Error");
+        setStatus(HTTP_INTERNAL_ERROR, "Internal Server Error");
         setBody("Internal Server Error");
         return;
     }
@@ -149,7 +150,7 @@ std::size_t HttpResponse::getContentLength() const { return m_Body.length(); }
 std::string HttpResponse::toString() const {
     std::ostringstream response;
 
-    // Status line: HTTP/1.1 200 OK
+    // Status line: HTTP/1.1 HTTP_OK OK
     response << "HTTP/1.1 " << m_StatusCode << " " << m_StatusMessage << "\r\n";
 
     // Headers
@@ -168,7 +169,7 @@ std::string HttpResponse::toString() const {
 }
 
 void HttpResponse::clear() {
-    m_StatusCode = 200;
+    m_StatusCode = HTTP_OK;
     m_StatusMessage = "OK";
     m_Headers.clear();
     m_Body.clear();
@@ -180,7 +181,7 @@ void HttpResponse::clear() {
 /* @------------------------------------------------------------------------@ */
 
 HttpResponse HttpResponse::createOK(const std::string& body) {
-    HttpResponse response(200);
+    HttpResponse response(HTTP_OK);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
     if (!body.empty()) {
         response.setBody(body);
@@ -189,12 +190,12 @@ HttpResponse HttpResponse::createOK(const std::string& body) {
 }
 
 HttpResponse HttpResponse::createNotFound(const std::string& message) {
-    HttpResponse response(404);
+    HttpResponse response(HTTP_NOT_FOUND);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
 
     std::string body = message.empty()
-                           ? "<!DOCTYPE html><html><head><title>404 Not Found</title></head>"
-                             "<body><h1>404 Not Found</h1><p>The requested resource was not "
+                           ? "<!DOCTYPE html><html><head><title>HTTP_NOT_FOUND Not Found</title></head>"
+                             "<body><h1>HTTP_NOT_FOUND Not Found</h1><p>The requested resource was not "
                              "found.</p></body></html>"
                            : message;
 
@@ -203,13 +204,13 @@ HttpResponse HttpResponse::createNotFound(const std::string& message) {
 }
 
 HttpResponse HttpResponse::createInternalError(const std::string& message) {
-    HttpResponse response(500);
+    HttpResponse response(HTTP_INTERNAL_ERROR);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
 
     std::string body =
         message.empty()
-            ? "<!DOCTYPE html><html><head><title>500 Internal Server Error</title></head>"
-              "<body><h1>500 Internal Server Error</h1><p>The server encountered an "
+            ? "<!DOCTYPE html><html><head><title>HTTP_INTERNAL_ERROR Internal Server Error</title></head>"
+              "<body><h1>HTTP_INTERNAL_ERROR Internal Server Error</h1><p>The server encountered an "
               "error.</p></body></html>"
             : message;
 
@@ -218,13 +219,13 @@ HttpResponse HttpResponse::createInternalError(const std::string& message) {
 }
 
 HttpResponse HttpResponse::createBadRequest(const std::string& message) {
-    HttpResponse response(400);
+    HttpResponse response(HTTP_BAD_REQUEST);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
 
     std::string body =
         message.empty()
-            ? "<!DOCTYPE html><html><head><title>400 Bad Request</title></head>"
-              "<body><h1>400 Bad Request</h1><p>The request was malformed.</p></body></html>"
+            ? "<!DOCTYPE html><html><head><title>HTTP_BAD_REQUEST Bad Request</title></head>"
+              "<body><h1>HTTP_BAD_REQUEST Bad Request</h1><p>The request was malformed.</p></body></html>"
             : message;
 
     response.setBody(body);
@@ -232,12 +233,12 @@ HttpResponse HttpResponse::createBadRequest(const std::string& message) {
 }
 
 HttpResponse HttpResponse::createMethodNotAllowed(const std::string& message) {
-    HttpResponse response(405);
+    HttpResponse response(HTTP_METHOD_NOT_ALLOWED);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
 
     std::string body =
-        message.empty() ? "<!DOCTYPE html><html><head><title>405 Method Not Allowed</title></head>"
-                          "<body><h1>405 Method Not Allowed</h1><p>The requested method is not "
+        message.empty() ? "<!DOCTYPE html><html><head><title>HTTP_METHOD_NOT_ALLOWED Method Not Allowed</title></head>"
+                          "<body><h1>HTTP_METHOD_NOT_ALLOWED Method Not Allowed</h1><p>The requested method is not "
                           "allowed.</p></body></html>"
                         : message;
 
@@ -249,52 +250,53 @@ HttpResponse HttpResponse::createMethodNotAllowed(const std::string& message) {
 /* |                             Private Methods                            | */
 /* @------------------------------------------------------------------------@ */
 
-std::string HttpResponse::getDefaultStatusMessage(int statusCode) const {
+std::string HttpResponse::getDefaultStatusMessage(int statusCode) {
     switch (statusCode) {
-        case 200:
+        case HTTP_OK:
             return "OK";
-        case 201:
+        case HTTP_CREATED:
             return "Created";
-        case 204:
+        case HTTP_NO_CONTENT:
             return "No Content";
-        case 301:
+        case HTTP_MOVED_PERMANENTLY:
             return "Moved Permanently";
-        case 302:
+        case HTTP_FOUND:
             return "Found";
-        case 400:
+        case HTTP_BAD_REQUEST:
             return "Bad Request";
-        case 401:
+        case HTTP_UNAUTHORIZED:
             return "Unauthorized";
-        case 403:
+        case HTTP_FORBIDDEN:
             return "Forbidden";
-        case 404:
+        case HTTP_NOT_FOUND:
             return "Not Found";
-        case 405:
+        case HTTP_METHOD_NOT_ALLOWED:
             return "Method Not Allowed";
-        case 413:
+        case HTTP_PAYLOAD_TOO_LARGE:
             return "Payload Too Large";
-        case 500:
+        case HTTP_INTERNAL_ERROR:
             return "Internal Server Error";
-        case 501:
+        case HTTP_NOT_IMPLEMENTED:
             return "Not Implemented";
-        case 505:
+        case HTTP_VERSION_NOT_SUPPORTED:
             return "HTTP Version Not Supported";
         default:
             return "Unknown";
     }
 }
 
-std::string HttpResponse::getCurrentDateTime() const {
+std::string HttpResponse::getCurrentDateTime() {
     // For C++98 compatibility, we'll use a simple timestamp
     // In a real implementation, you might want to format this properly
     return "Mon, 27 Jan 2025 12:00:00 GMT";
 }
 
-std::string HttpResponse::toLowerCase(const std::string& str) const {
+std::string HttpResponse::toLowerCase(const std::string& str) {
+    const int upperToLowerOffset = 32;
     std::string result = str;
     for (std::size_t i = 0; i < result.length(); ++i) {
         if (result[i] >= 'A' && result[i] <= 'Z') {
-            result[i] = result[i] + 32;
+            result[i] = static_cast<char>(result[i] + upperToLowerOffset);
         }
     }
     return result;
@@ -307,7 +309,7 @@ void HttpResponse::setDefaultHeaders() {
     setHeader("Content-Length", "0");
 }
 
-std::string HttpResponse::getContentType(const std::string& filePath) const {
+std::string HttpResponse::getContentType(const std::string& filePath) {
     // Find file extension
     std::size_t dotPos = filePath.rfind('.');
     if (dotPos == std::string::npos) {
@@ -317,19 +319,45 @@ std::string HttpResponse::getContentType(const std::string& filePath) const {
     std::string extension = toLowerCase(filePath.substr(dotPos));
 
     // Common MIME types
-    if (extension == ".html" || extension == ".htm") return "text/html; charset=utf-8";
-    if (extension == ".css") return "text/css";
-    if (extension == ".js") return "application/javascript";
-    if (extension == ".json") return "application/json";
-    if (extension == ".xml") return "application/xml";
-    if (extension == ".txt") return "text/plain; charset=utf-8";
-    if (extension == ".jpg" || extension == ".jpeg") return "image/jpeg";
-    if (extension == ".png") return "image/png";
-    if (extension == ".gif") return "image/gif";
-    if (extension == ".svg") return "image/svg+xml";
-    if (extension == ".ico") return "image/x-icon";
-    if (extension == ".pdf") return "application/pdf";
-    if (extension == ".zip") return "application/zip";
+    if (extension == ".html" || extension == ".htm") {
+        return "text/html; charset=utf-8";
+    }
+    if (extension == ".css") {
+        return "text/css";
+    }
+    if (extension == ".js") {
+        return "application/javascript";
+    }
+    if (extension == ".json") {
+        return "application/json";
+    }
+    if (extension == ".xml") {
+        return "application/xml";
+    }
+    if (extension == ".txt") {
+        return "text/plain; charset=utf-8";
+    }
+    if (extension == ".jpg" || extension == ".jpeg") {
+        return "image/jpeg";
+    }
+    if (extension == ".png") {
+        return "image/png";
+    }
+    if (extension == ".gif") {
+        return "image/gif";
+    }
+    if (extension == ".svg") {
+        return "image/svg+xml";
+    }
+    if (extension == ".ico") {
+        return "image/x-icon";
+    }
+    if (extension == ".pdf") {
+        return "application/pdf";
+    }
+    if (extension == ".zip") {
+        return "application/zip";
+    }
 
     return "application/octet-stream";
 }

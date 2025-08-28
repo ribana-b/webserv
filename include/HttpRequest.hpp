@@ -67,10 +67,10 @@ private:
     bool        parseRequestLine(const std::string& line);
     bool        parseHeaders(const std::string& headerSection);
     bool        parseBody(const std::string& rawData, std::size_t headerEnd);
-    std::string toLowerCase(const std::string& str) const;
-    std::string trimWhitespace(const std::string& str) const;
-    bool        isValidMethod(const std::string& method) const;
-    bool        isValidVersion(const std::string& version) const;
+    static std::string toLowerCase(const std::string& str);
+    static std::string trimWhitespace(const std::string& str);
+    static bool        isValidMethod(const std::string& method);
+    static bool        isValidVersion(const std::string& version);
 };
 
 /* @------------------------------------------------------------------------@ */

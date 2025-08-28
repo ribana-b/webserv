@@ -70,7 +70,7 @@ HttpResponse HttpServer::processRequest(const HttpRequest& request, int serverPo
     }
 
     const Config::Server* server = findMatchingServer(serverPort);
-    if (!server) {
+    if (server == 0) {
         m_Logger.error() << "No server configuration found for port " << serverPort;
         return HttpResponse::createInternalError("Server configuration error");
     }
@@ -79,16 +79,19 @@ HttpResponse HttpServer::processRequest(const HttpRequest& request, int serverPo
 
     if (method == "GET") {
         return handleGET(request, *server);
-    } else if (method == "POST") {
-        return handlePOST(request, *server);
-    } else if (method == "DELETE") {
-        return handleDELETE(request, *server);
-    } else if (method == "HEAD") {
-        return handleHEAD(request, *server);
-    } else {
-        m_Logger.warn() << "Method not allowed: " << method;
-        return createErrorResponse(405, *server);
     }
+    if (method == "POST") {
+        return handlePOST(request, *server);
+    }
+    if (method == "DELETE") {
+        return handleDELETE(request, *server);
+    }
+    if (method == "HEAD") {
+        return handleHEAD(request, *server);
+    }
+    
+    m_Logger.warn() << "Method not allowed: " << method;
+    return createErrorResponse(HTTP_METHOD_NOT_ALLOWED, *server);
 }
 
 void HttpServer::setDocumentRoot(const std::string& root) { m_DocumentRoot = root; }
@@ -108,23 +111,23 @@ HttpResponse HttpServer::handleGET(const HttpRequest& request, const Config::Ser
 
     if (!isPathSafe(requestPath)) {
         m_Logger.warn() << "Unsafe path detected: " << requestPath;
-        return createErrorResponse(403, server);
+        return createErrorResponse(HTTP_FORBIDDEN, server);
     }
 
     // Find matching location for this request
     const Config::Location* location = findMatchingLocation(server, requestPath);
 
     // Check if method is allowed for this location
-    if (location && !isMethodAllowed("GET", *location)) {
+    if ((location != 0) && !isMethodAllowed("GET", *location)) {
         m_Logger.warn() << "GET method not allowed for path: " << requestPath;
-        return createErrorResponse(405, server);
+        return createErrorResponse(HTTP_METHOD_NOT_ALLOWED, server);
     }
 
     // Determine document root and index file
     std::string documentRoot;
     std::string indexFile = "index.html";
 
-    if (location && !location->root.empty()) {
+    if ((location != 0) && !location->root.empty()) {
         documentRoot = location->root;
         if (!location->index.empty()) {
             indexFile = location->index[0];
@@ -157,21 +160,20 @@ HttpResponse HttpServer::handleGET(const HttpRequest& request, const Config::Ser
 
     struct stat fileStat;
     if (stat(filePath.c_str(), &fileStat) != 0) {
-        return createErrorResponse(404, server);
+        return createErrorResponse(HTTP_NOT_FOUND, server);
     }
 
     if (S_ISREG(fileStat.st_mode)) {
         // Check if it's a CGI file
         if (isCGIFile(filePath)) {
             return handleCGI(request, server, filePath);
-        } else {
-            return serveStaticFile(filePath, server);
         }
-    } else if (S_ISDIR(fileStat.st_mode)) {
-        return generateDirectoryListing(filePath, requestPath, server);
-    } else {
-        return createErrorResponse(403, server);
+        return serveStaticFile(filePath, server);
     }
+    if (S_ISDIR(fileStat.st_mode)) {
+        return generateDirectoryListing(filePath, requestPath, server);
+    }
+    return createErrorResponse(HTTP_FORBIDDEN, server);
 }
 
 HttpResponse HttpServer::handlePOST(const HttpRequest& request, const Config::Server& server) {
@@ -184,17 +186,17 @@ HttpResponse HttpServer::handlePOST(const HttpRequest& request, const Config::Se
     const Config::Location* location = findMatchingLocation(server, requestPath);
 
     // Check if method is allowed for this location
-    if (location && !isMethodAllowed("POST", *location)) {
+    if ((location != 0) && !isMethodAllowed("POST", *location)) {
         m_Logger.warn() << "POST method not allowed for path: " << requestPath;
-        return createErrorResponse(405, server);
+        return createErrorResponse(HTTP_METHOD_NOT_ALLOWED, server);
     }
 
     // Check client body size limit
-    if (location && location->clientMaxBodySize > 0 &&
+    if ((location != 0) && location->clientMaxBodySize > 0 &&
         request.getBody().length() > location->clientMaxBodySize) {
         m_Logger.warn() << "Request body too large: " << request.getBody().length() << " > "
                         << location->clientMaxBodySize;
-        return createErrorResponse(413, server);
+        return createErrorResponse(HTTP_PAYLOAD_TOO_LARGE, server);
     }
 
     // Check if this is a CGI script request
@@ -206,7 +208,7 @@ HttpResponse HttpServer::handlePOST(const HttpRequest& request, const Config::Se
 
     // Determine document root
     std::string documentRoot;
-    if (location && !location->root.empty()) {
+    if ((location != 0) && !location->root.empty()) {
         documentRoot = location->root;
     } else {
         documentRoot = server.root;
@@ -241,7 +243,7 @@ HttpResponse HttpServer::handlePOST(const HttpRequest& request, const Config::Se
             body = request.getBody();
             if (body.empty()) {
                 m_Logger.warn() << "Empty upload request body";
-                return createErrorResponse(400, server);
+                return createErrorResponse(HTTP_BAD_REQUEST, server);
             }
         }
 
@@ -349,18 +351,18 @@ HttpResponse HttpServer::handlePOST(const HttpRequest& request, const Config::Se
                                            : "Small file (in memory)")
                          << "</p>";
 
-            HttpResponse response(200, m_Logger);
+            HttpResponse response(HTTP_OK, m_Logger);
             response.setHeader("Content-Type", "text/html");
             response.setBody(responseBody.str());
             return response;
-        } else {
-            m_Logger.error() << "Failed to save uploaded file: " << filename;
-            return createErrorResponse(500, server);
         }
+        
+        m_Logger.error() << "Failed to save uploaded file: " << filename;
+        return createErrorResponse(HTTP_INTERNAL_ERROR, server);
     }
 
     // Default POST response
-    HttpResponse response(200, m_Logger);
+    HttpResponse response(HTTP_OK, m_Logger);
     response.setHeader("Content-Type", "text/plain");
     response.setBody("POST request processed successfully");
     return response;
@@ -373,21 +375,21 @@ HttpResponse HttpServer::handleDELETE(const HttpRequest& request, const Config::
 
     if (!isPathSafe(requestPath)) {
         m_Logger.warn() << "Unsafe path detected in DELETE: " << requestPath;
-        return createErrorResponse(403, server);
+        return createErrorResponse(HTTP_FORBIDDEN, server);
     }
 
     // Find matching location for this request
     const Config::Location* location = findMatchingLocation(server, requestPath);
 
     // Check if method is allowed for this location
-    if (location && !isMethodAllowed("DELETE", *location)) {
+    if ((location != 0) && !isMethodAllowed("DELETE", *location)) {
         m_Logger.warn() << "DELETE method not allowed for path: " << requestPath;
-        return createErrorResponse(405, server);
+        return createErrorResponse(HTTP_METHOD_NOT_ALLOWED, server);
     }
 
     // Determine document root
     std::string documentRoot;
-    if (location && !location->root.empty()) {
+    if ((location != 0) && !location->root.empty()) {
         documentRoot = location->root;
     } else {
         documentRoot = server.root;
@@ -402,25 +404,24 @@ HttpResponse HttpServer::handleDELETE(const HttpRequest& request, const Config::
 
     struct stat fileStat;
     if (stat(filePath.c_str(), &fileStat) != 0) {
-        return createErrorResponse(404, server);
+        return createErrorResponse(HTTP_NOT_FOUND, server);
     }
 
     if (S_ISREG(fileStat.st_mode)) {
         if (unlink(filePath.c_str()) == 0) {
             m_Logger.info() << "File deleted successfully: " << filePath;
 
-            HttpResponse response(200, m_Logger);
+            HttpResponse response(HTTP_OK, m_Logger);
             response.setHeader("Content-Type", "text/html");
             response.setBody("<h1>Delete Successful!</h1><p>File deleted: " + requestPath + "</p>");
             return response;
-        } else {
-            m_Logger.error() << "Failed to delete file: " << filePath;
-            return createErrorResponse(500, server);
         }
-    } else {
-        m_Logger.warn() << "Cannot delete non-regular file: " << filePath;
-        return createErrorResponse(403, server);
+        
+        m_Logger.error() << "Failed to delete file: " << filePath;
+        return createErrorResponse(HTTP_INTERNAL_ERROR, server);
     }
+    m_Logger.warn() << "Cannot delete non-regular file: " << filePath;
+    return createErrorResponse(HTTP_FORBIDDEN, server);
 }
 
 HttpResponse HttpServer::handleHEAD(const HttpRequest& request, const Config::Server& server) {
@@ -428,23 +429,23 @@ HttpResponse HttpServer::handleHEAD(const HttpRequest& request, const Config::Se
 
     if (!isPathSafe(requestPath)) {
         m_Logger.warn() << "Unsafe path detected: " << requestPath;
-        return createErrorResponse(403, server);
+        return createErrorResponse(HTTP_FORBIDDEN, server);
     }
 
     // Find matching location for this request
     const Config::Location* location = findMatchingLocation(server, requestPath);
 
     // Check if method is allowed for this location
-    if (location && !isMethodAllowed("HEAD", *location)) {
+    if ((location != 0) && !isMethodAllowed("HEAD", *location)) {
         m_Logger.warn() << "HEAD method not allowed for path: " << requestPath;
-        return createErrorResponse(405, server);
+        return createErrorResponse(HTTP_METHOD_NOT_ALLOWED, server);
     }
 
     // Determine document root and index file
     std::string documentRoot;
     std::string indexFile = "index.html";
 
-    if (location && !location->root.empty()) {
+    if ((location != 0) && !location->root.empty()) {
         documentRoot = location->root;
         if (!location->index.empty()) {
             indexFile = location->index[0];
@@ -460,7 +461,7 @@ HttpResponse HttpServer::handleHEAD(const HttpRequest& request, const Config::Se
         documentRoot = "./html";
     }
 
-    if (documentRoot.empty() || documentRoot.length() > 500) {
+    if (documentRoot.empty() || documentRoot.length() > HTTP_INTERNAL_ERROR) {
         m_Logger.warn() << "HEAD: Invalid server.root, using fallback";
         documentRoot = "./html";
     }
@@ -468,16 +469,16 @@ HttpResponse HttpServer::handleHEAD(const HttpRequest& request, const Config::Se
     // Get index file from server config
     if (!server.index.empty()) {
         indexFile = server.index[0];
-        if (indexFile.length() > 100 || indexFile.find("..") != std::string::npos) {
+        if (indexFile.length() > MIN_PATH_LENGTH || indexFile.find("..") != std::string::npos) {
             m_Logger.warn() << "HEAD: Invalid index file name, using default";
             indexFile = "index.html";
         }
     }
 
     // Validate path lengths before concatenation
-    if (documentRoot.length() + requestPath.length() > 800) {
+    if (documentRoot.length() + requestPath.length() > MAX_PATH_LENGTH) {
         m_Logger.error() << "HEAD: Combined path would be too long";
-        return createErrorResponse(414, server);
+        return createErrorResponse(HTTP_URI_TOO_LONG, server);
     }
 
     // Safe path construction
@@ -489,41 +490,42 @@ HttpResponse HttpServer::handleHEAD(const HttpRequest& request, const Config::Se
             filePath = documentRoot + requestPath;
         }
 
-        if (filePath.length() > 1000) {
+        if (filePath.length() > MAX_FILE_SIZE_MB) {
             m_Logger.error() << "HEAD: Final filePath too long: " << filePath.length();
-            return createErrorResponse(414, server);
+            return createErrorResponse(HTTP_URI_TOO_LONG, server);
         }
 
     } catch (const std::exception& e) {
         m_Logger.error() << "HEAD: String concatenation failed: " << e.what();
-        return createErrorResponse(500, server);
+        return createErrorResponse(HTTP_INTERNAL_ERROR, server);
     }
 
     struct stat fileStat;
     if (stat(filePath.c_str(), &fileStat) != 0) {
-        return createErrorResponse(404, server);
+        return createErrorResponse(HTTP_NOT_FOUND, server);
     }
 
     if (S_ISREG(fileStat.st_mode)) {
-        HttpResponse response(200, m_Logger);
+        HttpResponse response(HTTP_OK, m_Logger);
 
         // Simple MIME type detection
         std::string contentType = "application/octet-stream";
         std::size_t dotPos = filePath.find_last_of('.');
         if (dotPos != std::string::npos) {
             std::string extension = filePath.substr(dotPos);
-            if (extension == ".html" || extension == ".htm")
+            if (extension == ".html" || extension == ".htm") {
                 contentType = "text/html; charset=utf-8";
-            else if (extension == ".css")
+            } else if (extension == ".css") {
                 contentType = "text/css";
-            else if (extension == ".js")
+            } else if (extension == ".js") {
                 contentType = "application/javascript";
-            else if (extension == ".txt")
+            } else if (extension == ".txt") {
                 contentType = "text/plain; charset=utf-8";
-            else if (extension == ".jpg" || extension == ".jpeg")
+            } else if (extension == ".jpg" || extension == ".jpeg") {
                 contentType = "image/jpeg";
-            else if (extension == ".png")
+            } else if (extension == ".png") {
                 contentType = "image/png";
+            }
         }
 
         response.setHeader("Content-Type", contentType);
@@ -533,13 +535,14 @@ HttpResponse HttpServer::handleHEAD(const HttpRequest& request, const Config::Se
         response.setHeader("Content-Length", oss.str());
 
         return response;
-    } else if (S_ISDIR(fileStat.st_mode)) {
-        HttpResponse response(200, m_Logger);
+    }
+    if (S_ISDIR(fileStat.st_mode)) {
+        HttpResponse response(HTTP_OK, m_Logger);
         response.setHeader("Content-Type", "text/html");
         return response;
-    } else {
-        return createErrorResponse(403, server);
     }
+    
+    return createErrorResponse(HTTP_FORBIDDEN, server);
 }
 
 HttpResponse HttpServer::serveStaticFile(const std::string&    filePath,
@@ -547,46 +550,46 @@ HttpResponse HttpServer::serveStaticFile(const std::string&    filePath,
     // Security check: Detect and reject symbolic links
     struct stat linkStat;
     if (lstat(filePath.c_str(), &linkStat) != 0) {
-        return createErrorResponse(404, server);
+        return createErrorResponse(HTTP_NOT_FOUND, server);
     }
 
     if (S_ISLNK(linkStat.st_mode)) {
         m_Logger.warn() << "Symbolic link rejected for security reasons: " << filePath;
-        return createErrorResponse(403, server);
+        return createErrorResponse(HTTP_FORBIDDEN, server);
     }
 
     // Check if file exists and get stats (using stat for regular files)
     struct stat fileStat;
     if (stat(filePath.c_str(), &fileStat) != 0) {
-        return createErrorResponse(404, server);
+        return createErrorResponse(HTTP_NOT_FOUND, server);
     }
 
     // Verify it's a regular file
     if (!S_ISREG(fileStat.st_mode)) {
         m_Logger.warn() << "Not a regular file: " << filePath;
-        return createErrorResponse(403, server);
+        return createErrorResponse(HTTP_FORBIDDEN, server);
     }
 
     // Check read permissions
     if (access(filePath.c_str(), R_OK) != 0) {
         m_Logger.warn() << "No read permission for file: " << filePath;
-        return createErrorResponse(403, server);
+        return createErrorResponse(HTTP_FORBIDDEN, server);
     }
 
     // Check file size (basic limit of 100MB for safety)
-    const std::size_t MAX_FILE_SIZE = 100 * 1024 * 1024;
-    if (static_cast<std::size_t>(fileStat.st_size) > MAX_FILE_SIZE) {
+    const std::size_t maxFileSize = static_cast<std::size_t>(100) * BYTES_PER_KB * BYTES_PER_KB;
+    if (static_cast<std::size_t>(fileStat.st_size) > maxFileSize) {
         m_Logger.warn() << "File too large: " << filePath << " (" << fileStat.st_size << " bytes)";
-        return createErrorResponse(413, server);
+        return createErrorResponse(HTTP_PAYLOAD_TOO_LARGE, server);
     }
 
-    HttpResponse response(200, m_Logger);
+    HttpResponse response(HTTP_OK, m_Logger);
     response.setBodyFromFile(filePath);
 
     // Double-check that file loading succeeded
-    if (response.getStatusCode() != 200) {
+    if (response.getStatusCode() != HTTP_OK) {
         m_Logger.error() << "Failed to load file content: " << filePath;
-        return createErrorResponse(500, server);
+        return createErrorResponse(HTTP_INTERNAL_ERROR, server);
     }
 
     m_Logger.info() << "Served file: " << filePath << " (" << response.getContentLength()
@@ -599,13 +602,13 @@ HttpResponse HttpServer::generateDirectoryListing(const std::string&    dirPath,
                                                   const Config::Server& server) {
     (void)server;
 
-    HttpResponse response(200, m_Logger);
+    HttpResponse response(HTTP_OK, m_Logger);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
 
     DIR* dir = opendir(dirPath.c_str());
-    if (!dir) {
+    if (dir == 0) {
         m_Logger.warn() << "Cannot open directory: " << dirPath;
-        return createErrorResponse(403, server);
+        return createErrorResponse(HTTP_FORBIDDEN, server);
     }
 
     // Collect directory entries
@@ -664,7 +667,9 @@ HttpResponse HttpServer::generateDirectoryListing(const std::string&    dirPath,
         std::size_t lastSlash = parentPath.rfind('/');
         if (lastSlash != std::string::npos) {
             parentPath = parentPath.substr(0, lastSlash);
-            if (parentPath.empty()) parentPath = "/";
+            if (parentPath.empty()) {
+                parentPath = "/";
+            }
         }
         html << "<a href=\"" << parentPath << "\" class=\"directory\">[Parent Directory]</a>\n";
     }
@@ -673,12 +678,14 @@ HttpResponse HttpServer::generateDirectoryListing(const std::string&    dirPath,
     for (std::vector<std::string>::const_iterator it = directories.begin(); it != directories.end();
          ++it) {
         std::string linkPath = requestPath;
-        if (linkPath[linkPath.length() - 1] != '/') linkPath += "/";
+        if (linkPath[linkPath.length() - 1] != '/') {
+            linkPath += "/";
+        }
         linkPath += *it;
 
         std::string fullPath = joinPath(dirPath, *it);
         struct stat entryStat;
-        std::string sizeInfo = "";
+        std::string sizeInfo;
         if (stat(fullPath.c_str(), &entryStat) == 0) {
             sizeInfo = "<span class=\"size\">[DIR]</span>";
         }
@@ -690,20 +697,22 @@ HttpResponse HttpServer::generateDirectoryListing(const std::string&    dirPath,
     // Add files
     for (std::vector<std::string>::const_iterator it = files.begin(); it != files.end(); ++it) {
         std::string linkPath = requestPath;
-        if (linkPath[linkPath.length() - 1] != '/') linkPath += "/";
+        if (linkPath[linkPath.length() - 1] != '/') {
+            linkPath += "/";
+        }
         linkPath += *it;
 
         std::string fullPath = joinPath(dirPath, *it);
         struct stat entryStat;
-        std::string sizeInfo = "";
+        std::string sizeInfo;
         if (stat(fullPath.c_str(), &entryStat) == 0) {
             std::ostringstream size;
-            if (entryStat.st_size < 1024) {
+            if (entryStat.st_size < BYTES_PER_KB) {
                 size << entryStat.st_size << "B";
-            } else if (entryStat.st_size < 1024 * 1024) {
-                size << (entryStat.st_size / 1024) << "KB";
+            } else if (entryStat.st_size < static_cast<long>(BYTES_PER_KB) * BYTES_PER_KB) {
+                size << (entryStat.st_size / BYTES_PER_KB) << "KB";
             } else {
-                size << (entryStat.st_size / (1024 * 1024)) << "MB";
+                size << (entryStat.st_size / (static_cast<long>(BYTES_PER_KB) * BYTES_PER_KB)) << "MB";
             }
             sizeInfo = "<span class=\"size\">" + size.str() + "</span>";
         }
@@ -747,7 +756,7 @@ const Config::Server* HttpServer::findMatchingServer(int port) const {
 }
 
 const Config::Location* HttpServer::findMatchingLocation(const Config::Server& server,
-                                                         const std::string&    path) const {
+                                                         const std::string&    path) {
     // Check if server object is valid
     try {
         const std::vector<Config::Location>& locations = server.locations;
@@ -786,7 +795,7 @@ const Config::Location* HttpServer::findMatchingLocation(const Config::Server& s
 }
 
 bool HttpServer::isMethodAllowed(const std::string&      method,
-                                 const Config::Location& location) const {
+                                 const Config::Location& location) {
     const std::set<std::string>& allowedMethods = location.allowMethods;
 
     if (allowedMethods.empty()) {
@@ -803,7 +812,7 @@ bool HttpServer::isMethodAllowed(const std::string&      method,
     return false;
 }
 
-bool HttpServer::isPathSafe(const std::string& path) const {
+bool HttpServer::isPathSafe(const std::string& path) {
     if (path.find("..") != std::string::npos) {
         return false;
     }
@@ -815,7 +824,7 @@ bool HttpServer::isPathSafe(const std::string& path) const {
     return true;
 }
 
-bool HttpServer::isCGIFile(const std::string& filePath) const {
+bool HttpServer::isCGIFile(const std::string& filePath) {
     size_t dotPos = filePath.find_last_of('.');
     if (dotPos == std::string::npos) {
         return false;
@@ -836,9 +845,13 @@ std::string HttpServer::resolvePath(const std::string&      requestPath,
     return joinPath(basePath, requestPath);
 }
 
-std::string HttpServer::joinPath(const std::string& base, const std::string& path) const {
-    if (base.empty()) return path;
-    if (path.empty()) return base;
+std::string HttpServer::joinPath(const std::string& base, const std::string& path) {
+    if (base.empty()) {
+        return path;
+    }
+    if (path.empty()) {
+        return base;
+    }
 
     std::string result = base;
     if (result[result.length() - 1] != '/' && path[0] != '/') {
@@ -870,14 +883,14 @@ HttpResponse HttpServer::testCreateErrorResponse(int statusCode, const Config::S
     return createErrorResponse(statusCode, server);
 }
 
-bool HttpServer::testIsPathSafe(const std::string& path) const { return isPathSafe(path); }
+bool HttpServer::testIsPathSafe(const std::string& path) { return isPathSafe(path); }
 
 std::string HttpServer::testResolvePath(const std::string&      requestPath,
                                         const Config::Location& location) const {
     return resolvePath(requestPath, location);
 }
 
-std::string HttpServer::testJoinPath(const std::string& base, const std::string& path) const {
+std::string HttpServer::testJoinPath(const std::string& base, const std::string& path) {
     return joinPath(base, path);
 }
 
@@ -905,45 +918,45 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
     }
 
     // Create pipes for CGI communication
-    int stdin_pipe[2];
-    int stdout_pipe[2];
+    int stdinPipe[2];
+    int stdoutPipe[2];
 
-    if (pipe(stdin_pipe) == -1 || pipe(stdout_pipe) == -1) {
+    if (pipe(stdinPipe) == -1 || pipe(stdoutPipe) == -1) {
         m_Logger.error() << "Failed to create pipes for CGI";
-        return createErrorResponse(500, server);
+        return createErrorResponse(HTTP_INTERNAL_ERROR, server);
     }
 
     // Fork child process for CGI execution
     pid_t pid = fork();
     if (pid == -1) {
         m_Logger.error() << "Failed to fork for CGI execution";
-        close(stdin_pipe[0]);
-        close(stdin_pipe[1]);
-        close(stdout_pipe[0]);
-        close(stdout_pipe[1]);
-        return createErrorResponse(500, server);
+        close(stdinPipe[0]);
+        close(stdinPipe[1]);
+        close(stdoutPipe[0]);
+        close(stdoutPipe[1]);
+        return createErrorResponse(HTTP_INTERNAL_ERROR, server);
     }
 
     if (pid == 0) {
         // Child process - execute CGI script
 
         // Set up pipes
-        dup2(stdin_pipe[0], STDIN_FILENO);
-        dup2(stdout_pipe[1], STDOUT_FILENO);
-        dup2(stdout_pipe[1], STDERR_FILENO);
+        dup2(stdinPipe[0], STDIN_FILENO);
+        dup2(stdoutPipe[1], STDOUT_FILENO);
+        dup2(stdoutPipe[1], STDERR_FILENO);
 
         // Close unused pipe ends
-        close(stdin_pipe[1]);
-        close(stdout_pipe[0]);
-        close(stdin_pipe[0]);
-        close(stdout_pipe[1]);
+        close(stdinPipe[1]);
+        close(stdoutPipe[0]);
+        close(stdinPipe[0]);
+        close(stdoutPipe[1]);
 
         // Set environment variables according to CGI standard
         setenv("REQUEST_METHOD", request.getMethod().c_str(), 1);
 
         // Extract query string from path (everything after '?')
         std::string path = request.getPath();
-        std::string queryString = "";
+        std::string queryString;
         size_t      queryPos = path.find('?');
         if (queryPos != std::string::npos) {
             queryString = path.substr(queryPos + 1);
@@ -984,25 +997,25 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
         // Parent process - read CGI output
 
         // Close child's pipe ends
-        close(stdin_pipe[0]);
-        close(stdout_pipe[1]);
+        close(stdinPipe[0]);
+        close(stdoutPipe[1]);
 
         // Send request body to CGI if needed (for POST)
         if (request.getMethod() == "POST" && !request.getBody().empty()) {
-            write(stdin_pipe[1], request.getBody().c_str(), request.getBody().length());
+            write(stdinPipe[1], request.getBody().c_str(), request.getBody().length());
         }
-        close(stdin_pipe[1]);
+        close(stdinPipe[1]);
 
         // Read CGI output
         std::string cgiOutput;
-        char        buffer[8192];
+        char        buffer[CGI_BUFFER_SIZE];
         ssize_t     bytesRead;
 
-        while ((bytesRead = read(stdout_pipe[0], buffer, sizeof(buffer) - 1)) > 0) {
+        while ((bytesRead = read(stdoutPipe[0], buffer, sizeof(buffer) - 1)) > 0) {
             buffer[bytesRead] = '\0';
             cgiOutput += buffer;
         }
-        close(stdout_pipe[0]);
+        close(stdoutPipe[0]);
 
         // Wait for child to complete
         int status;
@@ -1012,15 +1025,15 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
             // CGI executed successfully
             m_Logger.info() << "CGI executed successfully, output size: " << cgiOutput.length();
 
-            HttpResponse response(200, m_Logger);
+            HttpResponse response(HTTP_OK, m_Logger);
             response.setHeader("Content-Type", "text/html");
             response.setBody(cgiOutput);
             return response;
-        } else {
-            // CGI execution failed
-            m_Logger.error() << "CGI execution failed with status: " << WEXITSTATUS(status);
-            return createErrorResponse(500, server);
         }
+        
+        // CGI execution failed
+        m_Logger.error() << "CGI execution failed with status: " << WEXITSTATUS(status);
+        return createErrorResponse(HTTP_INTERNAL_ERROR, server);
     }
 }
 
@@ -1053,24 +1066,23 @@ HttpResponse HttpServer::createErrorResponse(int statusCode, const Config::Serve
 
     // Fallback to default error responses
     switch (statusCode) {
-        case 400:
+        case HTTP_BAD_REQUEST:
             return HttpResponse::createBadRequest();
-        case 403: {
+        case HTTP_FORBIDDEN: {
             HttpResponse response = HttpResponse::createBadRequest();
-            response.setStatus(403, "Forbidden");
+            response.setStatus(HTTP_FORBIDDEN, "Forbidden");
             return response;
         }
-        case 404:
+        case HTTP_NOT_FOUND:
             return HttpResponse::createNotFound();
-        case 405:
+        case HTTP_METHOD_NOT_ALLOWED:
             return HttpResponse::createMethodNotAllowed();
-        case 413: {
+        case HTTP_PAYLOAD_TOO_LARGE: {
             HttpResponse response = HttpResponse::createInternalError();
-            response.setStatus(413, "Payload Too Large");
+            response.setStatus(HTTP_PAYLOAD_TOO_LARGE, "Payload Too Large");
             return response;
         }
-        case 500:
-            return HttpResponse::createInternalError();
+        case HTTP_INTERNAL_ERROR:
         default:
             return HttpResponse::createInternalError();
     }

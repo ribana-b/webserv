@@ -26,8 +26,9 @@
 /* |                            Define Section                              | */
 /* @------------------------------------------------------------------------@ */
 
-#define LARGE_FILE_THRESHOLD 1048576  // 1MB
-#define UPLOAD_BUFFER_SIZE   8192     // 8KB buffer for streaming
+#define LARGE_FILE_THRESHOLD    1048576  // 1MB
+#define UPLOAD_BUFFER_SIZE      8192     // 8KB buffer for streaming
+#define TEMP_FILE_PERMISSIONS   0600     // rw------- permissions
 
 /* @------------------------------------------------------------------------@ */
 /* |                             Class Section                              | */
@@ -72,7 +73,7 @@ private:
     bool        m_IsComplete;
     bool        m_AutoCleanup;
 
-    std::string generateTempFilePath();
+    static std::string generateTempFilePath();
     bool        createTempFile();
     void        closeTempFile();
     void        deleteTempFile();

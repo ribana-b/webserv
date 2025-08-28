@@ -143,7 +143,9 @@ std::size_t HttpRequest::getContentLength() const {
 
 bool HttpRequest::parseRequestLine(const std::string& line) {
     std::istringstream iss(line);
-    std::string        method, path, version;
+    std::string        method;
+    std::string        path;
+    std::string        version;
 
     if (!(iss >> method >> path >> version)) {
         m_Logger.error() << "Invalid request line format: " << line;
@@ -176,7 +178,7 @@ bool HttpRequest::parseHeaders(const std::string& headerSection) {
     std::istringstream headerStream(headerSection);
     std::string        line;
 
-    while (std::getline(headerStream, line) && !line.empty()) {
+    while ((std::getline(headerStream, line) != 0) && !line.empty()) {
         if (line[line.length() - 1] == '\r') {
             line.erase(line.length() - 1);
         }
@@ -236,17 +238,18 @@ bool HttpRequest::parseBody(const std::string& rawData, std::size_t headerEnd) {
     return true;
 }
 
-std::string HttpRequest::toLowerCase(const std::string& str) const {
+std::string HttpRequest::toLowerCase(const std::string& str) {
+    const int upperToLowerOffset = 32;
     std::string result = str;
     for (std::size_t i = 0; i < result.length(); ++i) {
         if (result[i] >= 'A' && result[i] <= 'Z') {
-            result[i] = result[i] + 32;
+            result[i] = static_cast<char>(result[i] + upperToLowerOffset);
         }
     }
     return result;
 }
 
-std::string HttpRequest::trimWhitespace(const std::string& str) const {
+std::string HttpRequest::trimWhitespace(const std::string& str) {
     std::size_t start = 0;
     std::size_t end = str.length();
 
@@ -261,12 +264,12 @@ std::string HttpRequest::trimWhitespace(const std::string& str) const {
     return str.substr(start, end - start);
 }
 
-bool HttpRequest::isValidMethod(const std::string& method) const {
+bool HttpRequest::isValidMethod(const std::string& method) {
     return (method == "GET" || method == "POST" || method == "DELETE" || method == "HEAD" ||
             method == "PUT" || method == "OPTIONS");
 }
 
-bool HttpRequest::isValidVersion(const std::string& version) const {
+bool HttpRequest::isValidVersion(const std::string& version) {
     return (version == "HTTP/1.0" || version == "HTTP/1.1");
 }
 

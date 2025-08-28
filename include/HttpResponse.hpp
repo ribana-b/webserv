@@ -68,11 +68,11 @@ private:
     std::map<std::string, std::string> m_Headers;
     std::string                        m_Body;
 
-    std::string getDefaultStatusMessage(int statusCode) const;
-    std::string getCurrentDateTime() const;
-    std::string toLowerCase(const std::string& str) const;
+    static std::string getDefaultStatusMessage(int statusCode);
+    static std::string getCurrentDateTime();
+    static std::string toLowerCase(const std::string& str);
     void        setDefaultHeaders();
-    std::string getContentType(const std::string& filePath) const;
+    static std::string getContentType(const std::string& filePath);
 };
 
 /* @------------------------------------------------------------------------@ */

@@ -302,7 +302,7 @@ bool Config::load(const std::string& configFilename) {
     std::string line;
     int         lineNumber = 0;
 
-    while (getline(file, line)) {
+    while ((std::getline(file, line)) != 0) {
         lineNumber++;
         std::string originalLine = line;
 

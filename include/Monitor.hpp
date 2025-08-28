@@ -74,11 +74,14 @@ private:
     ExecResult eventExecType(int fdesc, int &ready);
     ExecResult eventExecConnection(int fdesc, int &ready);
     ExecResult eventExecRequest(int fdesc, int &ready);
+    typedef std::size_t HeaderPosition;
+    typedef std::size_t ContentLength;
+    
     struct UploadInfo {
         std::size_t headerEndPos;
         std::size_t totalContentLength;
         
-        UploadInfo(std::size_t headerPos, std::size_t contentLen) : headerEndPos(headerPos), totalContentLength(contentLen) {}
+        UploadInfo(HeaderPosition headerPos, ContentLength contentLen) : headerEndPos(headerPos), totalContentLength(contentLen) {}
     };
     
     ExecResult handleLargeUpload(int fdesc, const std::string &rawRequest, 

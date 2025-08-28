@@ -260,7 +260,7 @@ bool UploadManager::createTempFile() {
     }
 
     // Open with write-only, create if not exists, truncate if exists
-    m_TempFd = open(m_TempFilePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    m_TempFd = open(m_TempFilePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, TEMP_FILE_PERMISSIONS);
     if (m_TempFd == -1) {
         m_Logger.error() << "UploadManager: Failed to open temp file: " << m_TempFilePath;
         m_TempFilePath.clear();

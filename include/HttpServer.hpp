@@ -14,6 +14,32 @@
 #define HTTPSERVER_HPP
 
 /* @------------------------------------------------------------------------@ */
+/* |                            Define Section                              | */
+/* @------------------------------------------------------------------------@ */
+
+#define HTTP_OK                 200
+#define HTTP_CREATED            201
+#define HTTP_NO_CONTENT         204
+#define HTTP_MOVED_PERMANENTLY  301
+#define HTTP_FOUND              302
+#define HTTP_BAD_REQUEST        400
+#define HTTP_UNAUTHORIZED       401
+#define HTTP_FORBIDDEN          403
+#define HTTP_NOT_FOUND          404
+#define HTTP_METHOD_NOT_ALLOWED 405
+#define HTTP_PAYLOAD_TOO_LARGE  413
+#define HTTP_URI_TOO_LONG       414
+#define HTTP_INTERNAL_ERROR     500
+#define HTTP_NOT_IMPLEMENTED    501
+#define HTTP_VERSION_NOT_SUPPORTED 505
+#define CGI_BUFFER_SIZE         8192
+#define BYTES_PER_KB            1024
+#define BYTES_PER_MB            (1024 * 1024)
+#define MIN_PATH_LENGTH         100
+#define MAX_PATH_LENGTH         800
+#define MAX_FILE_SIZE_MB        1000
+
+/* @------------------------------------------------------------------------@ */
 /* |                            Include Section                             | */
 /* @------------------------------------------------------------------------@ */
 
@@ -49,10 +75,10 @@ public:
                                               const Config::Server& server);
     HttpResponse testServeStaticFile(const std::string& filePath, const Config::Server& server);
     HttpResponse testCreateErrorResponse(int statusCode, const Config::Server& server);
-    bool         testIsPathSafe(const std::string& path) const;
+    static bool         testIsPathSafe(const std::string& path);
     std::string  testResolvePath(const std::string&      requestPath,
                                  const Config::Location& location) const;
-    std::string  testJoinPath(const std::string& base, const std::string& path) const;
+    static std::string  testJoinPath(const std::string& base, const std::string& path);
 
 private:
     const Config&  m_Config;
@@ -73,14 +99,14 @@ private:
                                           const Config::Server& server);
 
     const Config::Server*   findMatchingServer(int port) const;
-    const Config::Location* findMatchingLocation(const Config::Server& server,
-                                                 const std::string&    path) const;
+    static const Config::Location* findMatchingLocation(const Config::Server& server,
+                                                  const std::string&    path);
 
-    bool        isMethodAllowed(const std::string& method, const Config::Location& location) const;
-    bool        isPathSafe(const std::string& path) const;
-    bool        isCGIFile(const std::string& filePath) const;
+    static bool        isMethodAllowed(const std::string& method, const Config::Location& location);
+    static bool        isPathSafe(const std::string& path);
+    static bool        isCGIFile(const std::string& filePath);
     std::string resolvePath(const std::string& requestPath, const Config::Location& location) const;
-    std::string joinPath(const std::string& base, const std::string& path) const;
+    static std::string joinPath(const std::string& base, const std::string& path);
 
     HttpResponse createErrorResponse(int statusCode, const Config::Server& server);
 };
