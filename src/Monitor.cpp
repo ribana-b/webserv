@@ -50,7 +50,7 @@ Monitor::~Monitor() {
     // Clean up active uploads
     for (std::map<int, UploadState*>::iterator it = activeUploads.begin();
          it != activeUploads.end(); ++it) {
-        if (it->second) {
+        if (it->second != NULL) {
             it->second->manager->cleanup();
             delete it->second;
         }

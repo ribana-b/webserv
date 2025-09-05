@@ -42,8 +42,10 @@ struct UploadState {
     std::size_t    totalContentLength;
     std::string    rawRequest;
 
-    UploadState(UploadManager *mgr, std::size_t received, std::size_t total,
-                const std::string &request) :
+    // Constructor parameters are logically ordered and unlikely to be swapped
+    UploadState(UploadManager *mgr,
+                std::size_t    received,  // NOLINT(bugprone-easily-swappable-parameters)
+                std::size_t total, const std::string &request) :
         manager(mgr), totalReceived(received), totalContentLength(total), rawRequest(request) {}
 };
 

@@ -27,11 +27,12 @@
 #include "Logger.hpp"
 
 static std::size_t stringToNumber(const std::string& str) {
-    std::size_t result = 0;
+    const std::size_t decimal = 10;
+    std::size_t       result = 0;
     for (std::size_t i = 0; i < str.length(); ++i) {
         char c = str[i];
         if (c >= '0' && c <= '9') {
-            result = result * 10 + (c - '0');
+            result = result * decimal + (c - '0');
         } else {
             break;
         }

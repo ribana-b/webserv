@@ -25,11 +25,12 @@
 #include "UploadManager.hpp"
 
 static std::size_t stringToNumber(const std::string &str) {
-    std::size_t result = 0;
+    const std::size_t decimal = 10;
+    std::size_t       result = 0;
     for (std::size_t i = 0; i < str.length(); ++i) {
         char c = str[i];
         if (c >= '0' && c <= '9') {
-            result = result * 10 + (c - '0');
+            result = result * decimal + (c - '0');
         } else {
             break;
         }
@@ -91,7 +92,7 @@ Monitor::ExecResult Monitor::eventExecConnection(const int fdesc, int &ready) {
 Monitor::ExecResult Monitor::eventExecRequest(const int fdesc, int &ready) {
     // Check if this file descriptor has an ongoing upload
     UploadState *uploadState = getUploadState(fdesc);
-    if (uploadState) {
+    if (uploadState != NULL) {
         return continueUpload(fdesc, ready);
     }
 
@@ -260,9 +261,9 @@ Monitor::ExecResult Monitor::streamRemainingData(int fdesc, UploadManager &uploa
     char      buffer[UPLOAD_BUFFER_SIZE];
     Logger    logger(std::cout, true);
     int       consecutiveFailures = 0;
-    const int MAX_CONSECUTIVE_FAILURES = 50000;  // Allow more retries for large uploads
+    const int maxConsecutiveFailures = 50000;  // Allow more retries for large uploads
 
-    while (totalReceived < totalContentLength && consecutiveFailures < MAX_CONSECUTIVE_FAILURES) {
+    while (totalReceived < totalContentLength && consecutiveFailures < maxConsecutiveFailures) {
         ssize_t bytesRead = recv(fdesc, buffer, UPLOAD_BUFFER_SIZE, 0);
         if (bytesRead <= 0) {
             if (bytesRead == 0) {
@@ -375,7 +376,7 @@ void Monitor::removeUploadState(int fdesc) {
 
 Monitor::ExecResult Monitor::continueUpload(int fdesc, int &ready) {
     UploadState *uploadState = getUploadState(fdesc);
-    if (!uploadState) {
+    if (uploadState == NULL) {
         return Monitor::EXEC_SUCCESS;
     }
 
