@@ -25,6 +25,7 @@
 /* |                            Include Section                             | */
 /* @------------------------------------------------------------------------@ */
 
+#include <map>     // For std::map
 #include <vector>  // For std::vector
 
 #include "Config.hpp"
@@ -35,6 +36,17 @@ class UploadManager;  // Forward declaration
 class HttpResponse;   // Forward declaration
 class HttpRequest;    // Forward declaration
 
+struct UploadState {
+    UploadManager *manager;
+    std::size_t    totalReceived;
+    std::size_t    totalContentLength;
+    std::string    rawRequest;
+
+    UploadState(UploadManager *mgr, std::size_t received, std::size_t total,
+                const std::string &request) :
+        manager(mgr), totalReceived(received), totalContentLength(total), rawRequest(request) {}
+};
+
 /* @------------------------------------------------------------------------@ */
 /* |                             Class Section                              | */
 /* @------------------------------------------------------------------------@ */
@@ -43,17 +55,18 @@ struct pollfd;
 
 class Monitor {
 private:
-    Logger                      logger;
-    HttpServer                 *httpServer;
-    Config                      config;
-    std::vector<Config::Server> servers;  // Store servers for HTTP processing
-    struct pollfd              *fds;
-    int                        *listenFds;
-    int                        *listenPorts;      // Track which port each listen fd is for
-    int                        *connectionPorts;  // Track which port each connection fd came from
-    int                         listenCount;
-    int                         fdCount;
-    int                         maxFd;
+    Logger                       logger;
+    HttpServer                  *httpServer;
+    Config                       config;
+    std::vector<Config::Server>  servers;  // Store servers for HTTP processing
+    struct pollfd               *fds;
+    int                         *listenFds;
+    int                         *listenPorts;      // Track which port each listen fd is for
+    int                         *connectionPorts;  // Track which port each connection fd came from
+    int                          listenCount;
+    int                          fdCount;
+    int                          maxFd;
+    std::map<int, UploadState *> activeUploads;
 
     enum InitResult { INIT_SUCCESS, INIT_MEMORY_ERROR, INIT_LISTEN_ERROR };
 
@@ -101,11 +114,17 @@ private:
                                             std::size_t &totalContentLength, std::string &fullRequest, int fdesc);
     ExecResult         processHttpRequest(int fdesc, const std::string &rawRequest, int &ready);
     ExecResult         streamRemainingData(int fdesc, UploadManager &uploadManager,
-                                           std::size_t totalReceived, std::size_t totalContentLength);
+                                           std::size_t &totalReceived, std::size_t totalContentLength);
     static std::size_t extractContentLength(const std::string &rawRequest,
                                             std::size_t        contentLengthPos);
     HttpResponse       generateHttpResponse(const HttpRequest &httpRequest, int fdesc);
     static void        sendHttpResponse(int fdesc, const HttpResponse &httpResponse);
+
+    // Upload state management
+    UploadState *getUploadState(int fdesc);
+    void         addUploadState(int fdesc, UploadState *state);
+    void         removeUploadState(int fdesc);
+    ExecResult   continueUpload(int fdesc, int &ready);
 
 public:
     Monitor(const Logger &logger);

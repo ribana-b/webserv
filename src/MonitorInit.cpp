@@ -10,7 +10,6 @@
 /*                                                                            */
 /* ************************************************************************** */
 
-#include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/poll.h>
@@ -100,7 +99,10 @@ Monitor::InitResult Monitor::initData(std::vector<Config::Server> servers) {
     n = 0;
     for (std::size_t i = 0; i < servers.size(); ++i) {
         for (std::size_t j = 0; j < servers[i].listens.size(); ++j) {
-            memset(&address, 0, sizeof(address));
+            // Initialize struct manually instead of memset
+            address.sin_family = 0;
+            address.sin_port = 0;
+            address.sin_addr.s_addr = 0;
             address.sin_family = AF_INET;
             address.sin_addr.s_addr = servers[i].listens[j].first;
             address.sin_port = servers[i].listens[j].second;
@@ -138,31 +140,31 @@ int Monitor::initListenFd(struct sockaddr_in &address) {
 
     listenFd = socket(AF_INET, SOCK_STREAM, 0);
     if (listenFd < 0) {
-        tempLogger.error() << "socket() failed: " << strerror(errno);
+        tempLogger.error() << "socket() failed";
         return -1;
     }
 
     if (setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, &optVal, sizeof(optVal)) < 0) {
-        tempLogger.error() << "setsockopt(SO_REUSEADDR) failed: " << strerror(errno);
+        tempLogger.error() << "setsockopt(SO_REUSEADDR) failed";
         close(listenFd);
         return -1;
     }
 
     if (bind(listenFd, reinterpret_cast<struct sockaddr *>(&address), sizeof(address)) < 0) {
         tempLogger.error() << "bind() failed for " << ntohl(address.sin_addr.s_addr) << ":"
-                           << ntohs(address.sin_port) << " - " << strerror(errno);
+                           << ntohs(address.sin_port) << " - bind failed";
         close(listenFd);
         return -1;
     }
 
     if (fcntl(listenFd, F_SETFL, O_NONBLOCK) < 0) {
-        tempLogger.error() << "fcntl(O_NONBLOCK) failed: " << strerror(errno);
+        tempLogger.error() << "fcntl(O_NONBLOCK) failed";
         close(listenFd);
         return -1;  // Changed from return 1 to return -1 for consistency
     }
 
     if (listen(listenFd, LISTEN_BACKLOG) < 0) {
-        tempLogger.error() << "listen() failed: " << strerror(errno);
+        tempLogger.error() << "listen() failed";
         close(listenFd);
         return -1;
     }

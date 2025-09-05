@@ -12,11 +12,23 @@
 
 #include "HttpRequest.hpp"
 
-#include <cstdlib>   // For std::atoi
 #include <fstream>   // For std::ifstream
 #include <iostream>  // For std::cout
 #include <sstream>   // For std::istringstream
 #include <string>    // For std::string, getline
+
+static std::size_t stringToNumber(const std::string& str) {
+    std::size_t result = 0;
+    for (std::size_t i = 0; i < str.length(); ++i) {
+        char c = str[i];
+        if (c >= '0' && c <= '9') {
+            result = result * 10 + (c - '0');
+        } else {
+            break;
+        }
+    }
+    return result;
+}
 
 /* @------------------------------------------------------------------------@ */
 /* |                        Constructor/Destructor                          | */
@@ -134,7 +146,7 @@ std::size_t HttpRequest::getContentLength() const {
     if (contentLengthStr.empty()) {
         return 0;
     }
-    return static_cast<std::size_t>(std::atoi(contentLengthStr.c_str()));
+    return stringToNumber(contentLengthStr);
 }
 
 /* @------------------------------------------------------------------------@ */

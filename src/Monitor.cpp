@@ -24,6 +24,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "UploadManager.hpp"
+
 Monitor::Monitor(const Logger& newLogger) : logger(newLogger), httpServer(NULL) {
     this->fds = NULL;
     this->listenFds = NULL;
@@ -45,6 +47,16 @@ Monitor::Monitor() : httpServer(NULL) {
 }
 
 Monitor::~Monitor() {
+    // Clean up active uploads
+    for (std::map<int, UploadState*>::iterator it = activeUploads.begin();
+         it != activeUploads.end(); ++it) {
+        if (it->second) {
+            it->second->manager->cleanup();
+            delete it->second;
+        }
+    }
+    activeUploads.clear();
+
     delete[] this->fds;
     delete[] this->listenFds;
     delete[] this->listenPorts;
@@ -88,6 +100,9 @@ void Monitor::addPollFd(const int fdesc, int port) {
 
 void Monitor::closePollFd(const int fdesc) {
     int itr = 0;
+
+    // Clean up any upload state for this file descriptor
+    removeUploadState(fdesc);
 
     close(fdesc);
     while (itr < this->fdCount && fdesc != this->fds[itr].fd) {

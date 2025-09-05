@@ -17,7 +17,6 @@
 #include <sys/stat.h>    // For stat
 
 #include <cstddef>    // For std::size_t
-#include <cstdlib>    // For std::atoi
 #include <exception>  // For std::exception
 #include <fstream>    // For std::ifstream
 #include <iostream>   // For std::cout
@@ -26,6 +25,19 @@
 #include <vector>     // For std::vector
 
 #include "Logger.hpp"
+
+static std::size_t stringToNumber(const std::string& str) {
+    std::size_t result = 0;
+    for (std::size_t i = 0; i < str.length(); ++i) {
+        char c = str[i];
+        if (c >= '0' && c <= '9') {
+            result = result * 10 + (c - '0');
+        } else {
+            break;
+        }
+    }
+    return result;
+}
 
 #define DECIMAL 10
 
@@ -90,7 +102,7 @@ Config::Listen Config::parseListen(const std::string& value) {
 
     std::size_t colonPos = value.find(":");
     if (colonPos == std::string::npos) {
-        uint16_t port = static_cast<uint16_t>(std::atoi(value.c_str()));
+        uint16_t port = static_cast<uint16_t>(stringToNumber(value));
         uint32_t ip = INADDR_ANY;
         return Listen(htonl(ip), htons(port));
     }
@@ -98,7 +110,7 @@ Config::Listen Config::parseListen(const std::string& value) {
     std::string ipStr = value.substr(0, colonPos);
     std::string portStr = value.substr(colonPos + 1);
     uint32_t    ip = octetsToIp(getOctets(ipStr));
-    uint16_t    port = std::atoi(portStr.c_str());
+    uint16_t    port = static_cast<uint16_t>(stringToNumber(portStr));
 
     return Listen(htonl(ip), htons(port));
 }
@@ -133,14 +145,9 @@ std::size_t Config::parseClientMaxBodySize(const std::string& value) {
         return (0);
     }
 
-    char*       end;
-    std::size_t size = std::strtoul(value.c_str(), &end, DECIMAL);
-    if (*end == 'm' || *end == 'M') {
+    std::size_t size = stringToNumber(value);
+    if (!value.empty() && (value[value.length() - 1] == 'm' || value[value.length() - 1] == 'M')) {
         size *= MEGABYTE;
-    } else if (*end == '\0') {
-        // No suffix means bytes - keep as is
-    } else {
-        throw(std::exception());  // TODO(srvariable): InvalidSizeException
     }
 
     return (size);

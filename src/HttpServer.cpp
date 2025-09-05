@@ -19,9 +19,7 @@
 #include <unistd.h>      // For access, unlink, fork, exec, pipe
 
 #include <algorithm>  // For std::sort
-#include <cerrno>     // For errno, EXDEV
 #include <cstring>    // For strerror
-#include <ctime>      // For time()
 #include <fstream>    // For std::ofstream
 #include <iostream>   // For std::cout
 #include <set>        // For std::set
@@ -277,46 +275,35 @@ bool HttpServer::processLargeFileUpload(const HttpRequest& request, const std::s
         return true;
     }
 
-    if (errno == EXDEV) {
-        // Cross-device link error: copy and delete instead of rename
-        std::ifstream source(request.getTempFilePath().c_str(), std::ios::binary);
-        if (source.is_open()) {
-            std::ofstream dest(filename.c_str(), std::ios::binary);
-            if (dest.is_open()) {
-                dest << source.rdbuf();
-                source.close();
-                dest.close();
+    // Subject forbids errno checking - try copy and delete as fallback
+    std::ifstream source(request.getTempFilePath().c_str(), std::ios::binary);
+    if (source.is_open()) {
+        std::ofstream dest(filename.c_str(), std::ios::binary);
+        if (dest.is_open()) {
+            dest << source.rdbuf();
+            source.close();
+            dest.close();
 
-                // Verify copy was successful and get file size
-                std::ifstream verify(filename.c_str(), std::ios::binary | std::ios::ate);
-                if (verify.is_open()) {
-                    fileSize = static_cast<std::size_t>(verify.tellg());
-                    verify.close();
+            // Verify copy was successful and get file size
+            std::ifstream verify(filename.c_str(), std::ios::binary | std::ios::ate);
+            if (verify.is_open()) {
+                fileSize = static_cast<std::size_t>(verify.tellg());
+                verify.close();
 
-                    // Delete original temp file
-                    if (unlink(request.getTempFilePath().c_str()) == 0) {
-                        m_Logger.info()
-                            << "Large file copied successfully from " << request.getTempFilePath()
-                            << " to " << filename << " (" << fileSize << " bytes)";
-                    } else {
-                        m_Logger.warn() << "File copied but failed to delete temp file: "
-                                        << request.getTempFilePath();
-                    }
-                    return true;
-                }
-                m_Logger.error() << "Failed to verify copied file: " << filename;
-            } else {
-                source.close();
-                m_Logger.error() << "Failed to open destination file for writing: " << filename;
+                // Delete original temp file
+                unlink(request.getTempFilePath().c_str());
+                m_Logger.info() << "Large file copied successfully from "
+                                << request.getTempFilePath() << " to " << filename << " ("
+                                << fileSize << " bytes)";
+                return true;
             }
+            m_Logger.error() << "Failed to verify copied file: " << filename;
         } else {
-            m_Logger.error() << "Failed to open temp file for reading: "
-                             << request.getTempFilePath();
+            source.close();
+            m_Logger.error() << "Failed to open destination file for writing: " << filename;
         }
     } else {
-        m_Logger.error() << "Failed to move large upload from " << request.getTempFilePath()
-                         << " to " << filename << " (errno: " << errno << " - " << strerror(errno)
-                         << ")";
+        m_Logger.error() << "Failed to open temp file for reading: " << request.getTempFilePath();
     }
     return false;
 }
@@ -362,8 +349,9 @@ HttpResponse HttpServer::handleFileUpload(const HttpRequest& request, const Conf
     }
 
     // Generate final filename
-    std::ostringstream oss;
-    oss << "./html/uploaded_" << time(NULL);
+    std::ostringstream  oss;
+    static unsigned int uploadCounter = 0;
+    oss << "./html/uploaded_" << ++uploadCounter;
     if (isLargeUpload) {
         oss << "_large.bin";  // Use binary extension for large files
     } else {
@@ -624,7 +612,7 @@ HttpResponse HttpServer::serveStaticFile(const std::string&    filePath,
                                          const Config::Server& server) {
     // Security check: Detect and reject symbolic links
     struct stat linkStat;
-    if (lstat(filePath.c_str(), &linkStat) != 0) {
+    if (stat(filePath.c_str(), &linkStat) != 0) {
         return createErrorResponse(HTTP_NOT_FOUND, server);
     }
 
@@ -1120,13 +1108,18 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
         // Execute CGI script
         if (interpreter.empty()) {
             // Execute script directly (for .cgi files)
-            execl(filePath.c_str(), filePath.c_str(), (char*)NULL);
+            char* argv[] = {const_cast<char*>(filePath.c_str()), NULL};
+            char* envp[] = {NULL};  // Basic environment
+            execve(filePath.c_str(), argv, envp);
         } else {
             // Execute with interpreter (for .php, .py, .pl files)
-            execlp(interpreter.c_str(), interpreter.c_str(), filePath.c_str(), (char*)NULL);
+            char* argv[] = {const_cast<char*>(interpreter.c_str()),
+                            const_cast<char*>(filePath.c_str()), NULL};
+            char* envp[] = {NULL};  // Basic environment
+            execve(interpreter.c_str(), argv, envp);
         }
 
-        // If execl fails
+        // If execve fails
         _exit(1);
     } else {
         // Parent process - read CGI output

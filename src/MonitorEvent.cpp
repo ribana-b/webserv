@@ -14,9 +14,7 @@
 #include <poll.h>
 #include <sys/socket.h>
 
-#include <cerrno>
 #include <cstddef>
-#include <cstdlib>  // For std::atoi
 #include <cstring>  // For strerror
 #include <iostream>
 #include <string>
@@ -25,6 +23,19 @@
 #include "HttpResponse.hpp"
 #include "Monitor.hpp"
 #include "UploadManager.hpp"
+
+static std::size_t stringToNumber(const std::string &str) {
+    std::size_t result = 0;
+    for (std::size_t i = 0; i < str.length(); ++i) {
+        char c = str[i];
+        if (c >= '0' && c <= '9') {
+            result = result * 10 + (c - '0');
+        } else {
+            break;
+        }
+    }
+    return result;
+}
 
 int Monitor::eventInit(int ready) {
     for (int i = 0; ready > 0 && i <= this->maxFd; i++) {
@@ -59,9 +70,8 @@ Monitor::ExecResult Monitor::eventExecConnection(const int fdesc, int &ready) {
 
     while (true) {
         newFd = accept(fdesc, NULL, NULL);
-        if (newFd < 0 && errno != EWOULDBLOCK) {
-            return Monitor::EXEC_CONNECTION_ERROR;
-        }
+        // Subject forbids checking errno after I/O operations
+        // Simply handle negative return from accept() without errno checking
         if (newFd < 0) {
             break;
         }
@@ -79,6 +89,12 @@ Monitor::ExecResult Monitor::eventExecConnection(const int fdesc, int &ready) {
 }
 
 Monitor::ExecResult Monitor::eventExecRequest(const int fdesc, int &ready) {
+    // Check if this file descriptor has an ongoing upload
+    UploadState *uploadState = getUploadState(fdesc);
+    if (uploadState) {
+        return continueUpload(fdesc, ready);
+    }
+
     std::string rawRequest = readHttpRequest(fdesc);
 
     return processHttpRequest(fdesc, rawRequest, ready);
@@ -89,9 +105,10 @@ Monitor::ExecResult Monitor::handleLargeUpload(const int fdesc, const std::strin
     Logger logger(std::cout, true);
 
     // Create UploadManager for streaming
-    UploadManager uploadManager(logger);
-    if (!uploadManager.startLargeUpload(uploadInfo.totalContentLength)) {
+    UploadManager *uploadManager = new UploadManager(logger);
+    if (!uploadManager->startLargeUpload(uploadInfo.totalContentLength)) {
         logger.error() << "Failed to start large upload streaming";
+        delete uploadManager;
         this->closePollFd(fdesc);
         return Monitor::EXEC_SUCCESS;
     }
@@ -103,74 +120,24 @@ Monitor::ExecResult Monitor::handleLargeUpload(const int fdesc, const std::strin
         alreadyReceived = rawRequest.length() - bodyStart;
         const char *bodyData = rawRequest.data() + bodyStart;
 
-        if (!uploadManager.writeChunk(bodyData, alreadyReceived)) {
+        if (!uploadManager->writeChunk(bodyData, alreadyReceived)) {
             logger.error() << "Failed to write initial body chunk to disk";
-            uploadManager.cleanup();
+            uploadManager->cleanup();
+            delete uploadManager;
             this->closePollFd(fdesc);
             return Monitor::EXEC_SUCCESS;
         }
     }
 
-    // Continue reading remaining body data and stream to disk
-    std::size_t totalReceived = alreadyReceived;
+    // Create upload state and add to tracking
+    UploadState *state =
+        new UploadState(uploadManager, alreadyReceived, uploadInfo.totalContentLength, rawRequest);
+    addUploadState(fdesc, state);
 
-    ExecResult streamResult =
-        streamRemainingData(fdesc, uploadManager, totalReceived, uploadInfo.totalContentLength);
-    if (streamResult != Monitor::EXEC_SUCCESS) {
-        return streamResult;
-    }
-
-    // Finish the upload
-    if (!uploadManager.finishUpload()) {
-        logger.error() << "Failed to finish large upload";
-        uploadManager.cleanup();
-        this->closePollFd(fdesc);
-        return Monitor::EXEC_SUCCESS;
-    }
-
-    // Disable auto cleanup so HttpServer can process the temp file
-    uploadManager.disableAutoCleanup();
-
-    // Create a modified rawRequest with headers only and temp file reference
-    std::string headersOnly = rawRequest.substr(0, uploadInfo.headerEndPos + 4);
-    logger.info() << "Large upload completed successfully, temp file: "
-                  << uploadManager.getTempFilePath();
-
-    // Parse HTTP request (headers only, body will be read from temp file)
-    HttpRequest httpRequest(logger);
-    // Set temp file path before parsing so parseBody() knows to skip validation
-    httpRequest.setTempFilePath(uploadManager.getTempFilePath());
-    httpRequest.parse(headersOnly);
-
-    // Generate HTTP response using HttpServer
-    HttpResponse httpResponse;
-    if (httpRequest.isValid()) {
-        int serverPort = this->getPortForConnection(fdesc);
-        if (serverPort < 0) {
-            // Use first configured server port as fallback
-            if (!this->servers.empty() && !this->servers[0].listens.empty()) {
-                serverPort = this->servers[0].listens[0].second;
-            } else {
-                serverPort = DEFAULT_SERVER_PORT;  // Ultimate fallback if no config available
-            }
-        }
-
-        httpResponse = this->httpServer->processRequest(httpRequest, serverPort);
-    } else {
-        logger.warn() << "Invalid HTTP request received";
-        httpResponse = HttpResponse::createBadRequest();
-    }
-
-    // Send HTTP response
-    std::string responseString = httpResponse.toString();
-    send(fdesc, responseString.c_str(), responseString.size(), 0);
+    logger.info() << "Large upload started, received " << alreadyReceived << "/"
+                  << uploadInfo.totalContentLength << " bytes initially";
 
     ready--;
-
-    // Manual cleanup of temp file - HttpServer has finished processing
-    uploadManager.cleanup();
-
-    this->closePollFd(fdesc);
     return Monitor::EXEC_SUCCESS;
 }
 
@@ -228,7 +195,7 @@ bool Monitor::processContentLength(const std::string &rawRequest, std::size_t he
         lengthStr = lengthStr.substr(0, lengthStr.length() - 1);
     }
 
-    totalContentLength = static_cast<std::size_t>(std::atoi(lengthStr.c_str()));
+    totalContentLength = stringToNumber(lengthStr);
     std::size_t bodyStart = headerEndPos + 4;
     std::size_t currentBodySize = rawRequest.length() - bodyStart;
 
@@ -242,7 +209,7 @@ bool Monitor::processContentLength(const std::string &rawRequest, std::size_t he
                 if (moreBytesRead == 0) {
                     logger.warn() << "Connection closed while reading body";
                 } else {
-                    logger.warn() << "Error reading body data: " << errno;
+                    logger.warn() << "Error reading body data (subject forbids errno checking)";
                 }
                 break;
             }
@@ -288,12 +255,14 @@ Monitor::ExecResult Monitor::processHttpRequest(int fdesc, const std::string &ra
 }
 
 Monitor::ExecResult Monitor::streamRemainingData(int fdesc, UploadManager &uploadManager,
-                                                 std::size_t totalReceived,
-                                                 std::size_t totalContentLength) {
-    char   buffer[UPLOAD_BUFFER_SIZE];
-    Logger logger(std::cout, true);
+                                                 std::size_t &totalReceived,
+                                                 std::size_t  totalContentLength) {
+    char      buffer[UPLOAD_BUFFER_SIZE];
+    Logger    logger(std::cout, true);
+    int       consecutiveFailures = 0;
+    const int MAX_CONSECUTIVE_FAILURES = 50000;  // Allow more retries for large uploads
 
-    while (totalReceived < totalContentLength) {
+    while (totalReceived < totalContentLength && consecutiveFailures < MAX_CONSECUTIVE_FAILURES) {
         ssize_t bytesRead = recv(fdesc, buffer, UPLOAD_BUFFER_SIZE, 0);
         if (bytesRead <= 0) {
             if (bytesRead == 0) {
@@ -303,32 +272,16 @@ Monitor::ExecResult Monitor::streamRemainingData(int fdesc, UploadManager &uploa
                 this->closePollFd(fdesc);
                 return Monitor::EXEC_SUCCESS;
             }
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                pollfd pfd;
-                pfd.fd = fdesc;
-                pfd.events = POLLIN;
-                pfd.revents = 0;
-
-                int pollResult = poll(&pfd, 1, POLL_TIMEOUT_MS);
-                if (pollResult <= 0) {
-                    if (pollResult == 0) {
-                        logger.warn() << "Timeout waiting for upload data";
-                    } else {
-                        logger.error() << "Poll error during large upload: " << strerror(errno);
-                    }
-                    uploadManager.cleanup();
-                    this->closePollFd(fdesc);
-                    return Monitor::EXEC_SUCCESS;
-                }
-                continue;
-            }
-
-            logger.error() << "Error reading large upload data: " << strerror(errno)
-                           << " (errno=" << errno << ")";
-            uploadManager.cleanup();
-            this->closePollFd(fdesc);
-            return Monitor::EXEC_SUCCESS;
+            // recv() returned -1, which could be EAGAIN/EWOULDBLOCK or real error
+            // Subject forbids checking errno after I/O operations
+            // For non-blocking sockets, this typically means no more data available now
+            // Increment consecutive failure count to prevent infinite loops
+            consecutiveFailures++;
+            continue;
         }
+
+        // Reset consecutive failure count on successful read
+        consecutiveFailures = 0;
 
         std::size_t bytesToWrite = static_cast<std::size_t>(bytesRead);
         if (totalReceived + bytesToWrite > totalContentLength) {
@@ -345,6 +298,16 @@ Monitor::ExecResult Monitor::streamRemainingData(int fdesc, UploadManager &uploa
         totalReceived += bytesToWrite;
     }
 
+    // Check if upload completed successfully
+    if (totalReceived >= totalContentLength) {
+        return Monitor::EXEC_SUCCESS;
+    }
+
+    // Upload incomplete due to timeout or connection issues
+    logger.warn() << "Large upload incomplete: received " << totalReceived << "/"
+                  << totalContentLength << " bytes (consecutive failure limit reached)";
+    uploadManager.cleanup();
+    this->closePollFd(fdesc);
     return Monitor::EXEC_SUCCESS;
 }
 
@@ -366,7 +329,7 @@ std::size_t Monitor::extractContentLength(const std::string &rawRequest,
         lengthStr = lengthStr.substr(0, lengthStr.length() - 1);
     }
 
-    return static_cast<std::size_t>(std::atoi(lengthStr.c_str()));
+    return stringToNumber(lengthStr);
 }
 
 HttpResponse Monitor::generateHttpResponse(const HttpRequest &httpRequest, int fdesc) {
@@ -390,4 +353,108 @@ HttpResponse Monitor::generateHttpResponse(const HttpRequest &httpRequest, int f
 void Monitor::sendHttpResponse(int fdesc, const HttpResponse &httpResponse) {
     std::string responseString = httpResponse.toString();
     send(fdesc, responseString.c_str(), responseString.size(), 0);
+}
+
+UploadState *Monitor::getUploadState(int fdesc) {
+    std::map<int, UploadState *>::iterator it = activeUploads.find(fdesc);
+    if (it != activeUploads.end()) {
+        return it->second;
+    }
+    return NULL;
+}
+
+void Monitor::addUploadState(int fdesc, UploadState *state) { activeUploads[fdesc] = state; }
+
+void Monitor::removeUploadState(int fdesc) {
+    std::map<int, UploadState *>::iterator it = activeUploads.find(fdesc);
+    if (it != activeUploads.end()) {
+        delete it->second;
+        activeUploads.erase(it);
+    }
+}
+
+Monitor::ExecResult Monitor::continueUpload(int fdesc, int &ready) {
+    UploadState *uploadState = getUploadState(fdesc);
+    if (!uploadState) {
+        return Monitor::EXEC_SUCCESS;
+    }
+
+    Logger logger(std::cout, true);
+    char   buffer[UPLOAD_BUFFER_SIZE];
+
+    ssize_t bytesRead = recv(fdesc, buffer, UPLOAD_BUFFER_SIZE, 0);
+    if (bytesRead <= 0) {
+        if (bytesRead == 0) {
+            logger.warn() << "Connection closed during large upload (received "
+                          << uploadState->totalReceived << "/" << uploadState->totalContentLength
+                          << " bytes)";
+            uploadState->manager->cleanup();
+            removeUploadState(fdesc);
+            this->closePollFd(fdesc);
+            return Monitor::EXEC_SUCCESS;
+        }
+        return Monitor::EXEC_SUCCESS;
+    }
+
+    std::size_t bytesToWrite = static_cast<std::size_t>(bytesRead);
+    if (uploadState->totalReceived + bytesToWrite > uploadState->totalContentLength) {
+        bytesToWrite = uploadState->totalContentLength - uploadState->totalReceived;
+    }
+
+    if (!uploadState->manager->writeChunk(buffer, bytesToWrite)) {
+        logger.error() << "Failed to write chunk to disk during large upload";
+        uploadState->manager->cleanup();
+        removeUploadState(fdesc);
+        this->closePollFd(fdesc);
+        return Monitor::EXEC_SUCCESS;
+    }
+
+    uploadState->totalReceived += bytesToWrite;
+
+    if (uploadState->totalReceived >= uploadState->totalContentLength) {
+        if (!uploadState->manager->finishUpload()) {
+            logger.error() << "Failed to finish large upload";
+            uploadState->manager->cleanup();
+            removeUploadState(fdesc);
+            this->closePollFd(fdesc);
+            return Monitor::EXEC_SUCCESS;
+        }
+
+        uploadState->manager->disableAutoCleanup();
+
+        std::string headersOnly =
+            uploadState->rawRequest.substr(0, uploadState->rawRequest.find("\r\n\r\n") + 4);
+        logger.info() << "Large upload completed successfully, temp file: "
+                      << uploadState->manager->getTempFilePath();
+
+        HttpRequest httpRequest(logger);
+        httpRequest.setTempFilePath(uploadState->manager->getTempFilePath());
+        httpRequest.parse(headersOnly);
+
+        HttpResponse httpResponse;
+        if (httpRequest.isValid()) {
+            int serverPort = this->getPortForConnection(fdesc);
+            if (serverPort < 0) {
+                if (!this->servers.empty() && !this->servers[0].listens.empty()) {
+                    serverPort = this->servers[0].listens[0].second;
+                } else {
+                    serverPort = DEFAULT_SERVER_PORT;
+                }
+            }
+            httpResponse = this->httpServer->processRequest(httpRequest, serverPort);
+        } else {
+            logger.warn() << "Invalid HTTP request received";
+            httpResponse = HttpResponse::createBadRequest();
+        }
+
+        std::string responseString = httpResponse.toString();
+        send(fdesc, responseString.c_str(), responseString.size(), 0);
+
+        ready--;
+        uploadState->manager->cleanup();
+        removeUploadState(fdesc);
+        this->closePollFd(fdesc);
+    }
+
+    return Monitor::EXEC_SUCCESS;
 }
