@@ -53,7 +53,7 @@ public:
     bool load(const std::string& configFilename);
     bool load(const char* programName);
 
-    std::vector<Server> getServers() const;
+    const std::vector<Server>& getServers() const;
 
 private:
     static const std::string defaultConfigFilename;
@@ -63,17 +63,18 @@ private:
 
     static std::string searchConfigFile(const char* programName);
 
-    void handleClosedContext(Server& server, Location& currentLocation, bool& inLocation);
-    void handleListen(Server& server, std::istringstream& iss);
-    void handleRoot(Server& server, Location& currentLocation, bool& inLocation,
-                    std::istringstream& iss);
-    void handleErrorPage(Server& server, std::istringstream& iss);
-    void handleLocation(Location& currentLocation, bool& inLocation, std::istringstream& iss);
-    void handleIndex(Server& server, Location& currentLocation, bool& inLocation,
-                     std::istringstream& iss);
-    void handleAutoindex(Location& currentLocation, std::istringstream& iss);
-    void handleAllowMethods(Location& currentLocation, std::istringstream& iss);
-    void handleClientMaxBodySize(Location& currentLocation, std::istringstream& iss);
+    void        handleClosedContext(Server& server, Location& currentLocation, bool& inLocation);
+    static void handleListen(Server& server, std::istringstream& iss);
+    static void handleRoot(Server& server, Location& currentLocation, bool& inLocation,
+                           std::istringstream& iss);
+    static void handleErrorPage(Server& server, std::istringstream& iss);
+    static void handleLocation(Location& currentLocation, bool& inLocation,
+                               std::istringstream& iss);
+    static void handleIndex(Server& server, Location& currentLocation, bool& inLocation,
+                            std::istringstream& iss);
+    static void handleAutoindex(Location& currentLocation, std::istringstream& iss);
+    static void handleAllowMethods(Location& currentLocation, std::istringstream& iss);
+    static void handleClientMaxBodySize(Location& currentLocation, std::istringstream& iss);
 
     static Listen      parseListen(const std::string& value);
     static std::size_t parseClientMaxBodySize(const std::string& value);
