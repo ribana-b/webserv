@@ -138,6 +138,14 @@ Monitor::ExecResult Monitor::handleLargeUpload(const int fdesc, const std::strin
     logger.info() << "Large upload started, received " << alreadyReceived << "/"
                   << uploadInfo.totalContentLength << " bytes initially";
 
+    // Check for Expect: 100-continue header and respond
+    if (rawRequest.find("Expect: 100-continue") != std::string::npos ||
+        rawRequest.find("Expect: 100-Continue") != std::string::npos) {
+        const char *continueResponse = "HTTP/1.1 100 Continue\r\n\r\n";
+        send(fdesc, continueResponse, strlen(continueResponse), 0);
+        logger.info() << "Sent 100 Continue response to client";
+    }
+
     // Continue reading available data immediately (non-blocking socket)
     char buffer[UPLOAD_BUFFER_SIZE];
     while (state->totalReceived < state->totalContentLength) {
