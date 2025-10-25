@@ -13,12 +13,14 @@
 #include "HttpServer.hpp"
 
 #include <dirent.h>      // For directory operations
+#include <fcntl.h>       // For open, O_NOFOLLOW
 #include <netinet/in.h>  // For ntohs
 #include <sys/stat.h>    // For stat
 #include <sys/wait.h>    // For waitpid
 #include <unistd.h>      // For access, unlink, fork, exec, pipe
 
 #include <algorithm>  // For std::sort
+#include <cerrno>     // For errno
 #include <cstring>    // For strerror
 #include <fstream>    // For std::ofstream
 #include <iostream>   // For std::cout
@@ -610,18 +612,20 @@ std::string HttpServer::determineContentTypeFromPath(const std::string& filePath
 
 HttpResponse HttpServer::serveStaticFile(const std::string&    filePath,
                                          const Config::Server& server) {
-    // Security check: Detect and reject symbolic links
-    struct stat linkStat;
-    if (stat(filePath.c_str(), &linkStat) != 0) {
+    // Security check: Detect and reject symbolic links using O_NOFOLLOW
+    int testFd = open(filePath.c_str(), O_RDONLY | O_NOFOLLOW);
+    if (testFd == -1) {
+        // Check if it failed because it's a symlink
+        if (errno == ELOOP) {
+            m_Logger.warn() << "Symbolic link rejected for security reasons: " << filePath;
+            return createErrorResponse(HTTP_FORBIDDEN, server);
+        }
+        // Other error (file doesn't exist, permission denied, etc.)
         return createErrorResponse(HTTP_NOT_FOUND, server);
     }
+    close(testFd);
 
-    if (S_ISLNK(linkStat.st_mode)) {
-        m_Logger.warn() << "Symbolic link rejected for security reasons: " << filePath;
-        return createErrorResponse(HTTP_FORBIDDEN, server);
-    }
-
-    // Check if file exists and get stats (using stat for regular files)
+    // Check if file exists and get stats
     struct stat fileStat;
     if (stat(filePath.c_str(), &fileStat) != 0) {
         return createErrorResponse(HTTP_NOT_FOUND, server);
