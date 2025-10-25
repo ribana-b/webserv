@@ -71,6 +71,10 @@ private:
     static std::string trimWhitespace(const std::string& str);
     static bool        isValidMethod(const std::string& method);
     static bool        isValidVersion(const std::string& version);
+
+    // Chunked encoding support
+    std::string        decodeChunkedBody(const std::string& chunkedData);
+    static std::size_t hexToSize(const std::string& hex);
 };
 
 /* @------------------------------------------------------------------------@ */

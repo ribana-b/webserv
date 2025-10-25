@@ -90,6 +90,7 @@ private:
 
     HttpResponse handleGET(const HttpRequest& request, const Config::Server& server);
     HttpResponse handlePOST(const HttpRequest& request, const Config::Server& server);
+    HttpResponse handlePUT(const HttpRequest& request, const Config::Server& server);
     HttpResponse handleDELETE(const HttpRequest& request, const Config::Server& server);
     HttpResponse handleHEAD(const HttpRequest& request, const Config::Server& server);
     HttpResponse handleCGI(const HttpRequest& request, const Config::Server& server,

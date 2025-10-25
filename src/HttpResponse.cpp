@@ -235,6 +235,20 @@ HttpResponse HttpResponse::createBadRequest(const std::string& message) {
     return response;
 }
 
+HttpResponse HttpResponse::createForbidden(const std::string& message) {
+    HttpResponse response(HTTP_FORBIDDEN);
+    response.setHeader("Content-Type", "text/html; charset=utf-8");
+
+    std::string body =
+        message.empty()
+            ? "<!DOCTYPE html><html><head><title>403 Forbidden</title></head>"
+              "<body><h1>403 Forbidden</h1><p>Access to this resource is forbidden.</p></body></html>"
+            : message;
+
+    response.setBody(body);
+    return response;
+}
+
 HttpResponse HttpResponse::createMethodNotAllowed(const std::string& message) {
     HttpResponse response(HTTP_METHOD_NOT_ALLOWED);
     response.setHeader("Content-Type", "text/html; charset=utf-8");

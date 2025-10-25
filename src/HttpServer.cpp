@@ -28,6 +28,9 @@
 #include <sstream>    // For std::ostringstream
 #include <vector>     // For std::vector
 
+// POSIX environ variable for passing environment to execve()
+extern char **environ;
+
 /* @------------------------------------------------------------------------@ */
 /* |                        Constructor/Destructor                          | */
 /* @------------------------------------------------------------------------@ */
@@ -82,6 +85,9 @@ HttpResponse HttpServer::processRequest(const HttpRequest& request, int serverPo
     }
     if (method == "POST") {
         return handlePOST(request, *server);
+    }
+    if (method == "PUT") {
+        return handlePUT(request, *server);
     }
     if (method == "DELETE") {
         return handleDELETE(request, *server);
@@ -150,12 +156,23 @@ HttpResponse HttpServer::handleGET(const HttpRequest& request, const Config::Ser
         cleanPath = cleanPath.substr(0, queryPos);
     }
 
+    // Remove location prefix from request path if applicable
+    std::string relativePath = cleanPath;
+    if (location != 0 && !location->path.empty() && location->path != "/") {
+        if (cleanPath.find(location->path) == 0) {
+            relativePath = cleanPath.substr(location->path.length());
+            if (relativePath.empty()) {
+                relativePath = "/";
+            }
+        }
+    }
+
     // Construct file path
     std::string filePath;
-    if (cleanPath == "/") {
+    if (relativePath == "/") {
         filePath = documentRoot + "/" + indexFile;
     } else {
-        filePath = documentRoot + cleanPath;
+        filePath = documentRoot + relativePath;
     }
 
     struct stat fileStat;
@@ -171,6 +188,22 @@ HttpResponse HttpServer::handleGET(const HttpRequest& request, const Config::Ser
         return serveStaticFile(filePath, server);
     }
     if (S_ISDIR(fileStat.st_mode)) {
+        // If an index file is configured, verify it exists in the directory
+        // before generating directory listing
+        if (!indexFile.empty()) {
+            std::string indexPath = filePath;
+            if (indexPath[indexPath.length() - 1] != '/') {
+                indexPath += "/";
+            }
+            indexPath += indexFile;
+
+            struct stat indexStat;
+            if (stat(indexPath.c_str(), &indexStat) != 0 || !S_ISREG(indexStat.st_mode)) {
+                // Index file doesn't exist or is not a regular file
+                // Return 404 instead of directory listing
+                return createErrorResponse(HTTP_NOT_FOUND, server);
+            }
+        }
         return generateDirectoryListing(filePath, requestPath, server);
     }
     return createErrorResponse(HTTP_FORBIDDEN, server);
@@ -185,13 +218,8 @@ HttpResponse HttpServer::handlePOST(const HttpRequest& request, const Config::Se
     // Find matching location for this request
     const Config::Location* location = findMatchingLocation(server, requestPath);
 
-    // Validate POST request parameters
-    HttpResponse validationResponse = validatePOSTRequest(request, server, location, requestPath);
-    if (validationResponse.getStatusCode() != HTTP_OK) {
-        return validationResponse;
-    }
-
-    // Check if this is a CGI script request
+    // Check if this is a CGI script request FIRST (before method validation)
+    // CGI files have their own method requirements
     std::string cleanPath = requestPath;
     size_t      queryPos = cleanPath.find('?');
     if (queryPos != std::string::npos) {
@@ -200,14 +228,32 @@ HttpResponse HttpServer::handlePOST(const HttpRequest& request, const Config::Se
 
     // Determine document root and construct file path for CGI check
     std::string documentRoot = determinePOSTDocumentRoot(location, server);
-    std::string filePath = documentRoot + cleanPath;
 
-    // If it's a CGI file, handle it as CGI instead of upload
+    // Remove location prefix from request path if applicable
+    std::string relativePath = cleanPath;
+    if (location != 0 && !location->path.empty() && location->path != "/") {
+        if (cleanPath.find(location->path) == 0) {
+            relativePath = cleanPath.substr(location->path.length());
+            if (relativePath.empty()) {
+                relativePath = "/";
+            }
+        }
+    }
+
+    std::string filePath = documentRoot + relativePath;
+
+    // If it's a CGI file, handle it as CGI (bypass method validation)
     if (isCGIFile(filePath)) {
         struct stat fileStat;
         if (stat(filePath.c_str(), &fileStat) == 0 && S_ISREG(fileStat.st_mode)) {
             return handleCGI(request, server, filePath);
         }
+    }
+
+    // Not a CGI file - validate POST request parameters (including method check)
+    HttpResponse validationResponse = validatePOSTRequest(request, server, location, requestPath);
+    if (validationResponse.getStatusCode() != HTTP_OK) {
+        return validationResponse;
     }
 
     // Handle file upload or regular POST processing
@@ -350,10 +396,14 @@ HttpResponse HttpServer::handleFileUpload(const HttpRequest& request, const Conf
         return createErrorResponse(HTTP_BAD_REQUEST, server);
     }
 
-    // Generate final filename
+    // Get documentRoot from config for this location
+    const Config::Location* location = findMatchingLocation(server, requestPath);
+    std::string documentRoot = determinePOSTDocumentRoot(location, server);
+
+    // Generate final filename using documentRoot from config
     std::ostringstream  oss;
     static unsigned int uploadCounter = 0;
-    oss << "./html/uploaded_" << ++uploadCounter;
+    oss << documentRoot << "/upload/uploaded_" << ++uploadCounter;
     if (isLargeUpload) {
         oss << "_large.bin";  // Use binary extension for large files
     } else {
@@ -388,6 +438,75 @@ HttpResponse HttpServer::handleFileUpload(const HttpRequest& request, const Conf
     return createErrorResponse(HTTP_INTERNAL_ERROR, server);
 }
 
+HttpResponse HttpServer::handlePUT(const HttpRequest& request, const Config::Server& server) {
+    const std::string& requestPath = request.getPath();
+
+    m_Logger.info() << "PUT request to " << requestPath;
+
+    if (!isPathSafe(requestPath)) {
+        m_Logger.warn() << "Unsafe path detected in PUT: " << requestPath;
+        return createErrorResponse(HTTP_FORBIDDEN, server);
+    }
+
+    // Find matching location for this request
+    const Config::Location* location = findMatchingLocation(server, requestPath);
+
+    // Check if method is allowed for this location
+    if ((location != 0) && !isMethodAllowed("PUT", *location)) {
+        m_Logger.warn() << "PUT method not allowed for path: " << requestPath;
+        return createErrorResponse(HTTP_METHOD_NOT_ALLOWED, server);
+    }
+
+    // Determine document root
+    std::string documentRoot;
+    if ((location != 0) && !location->root.empty()) {
+        documentRoot = location->root;
+    } else {
+        documentRoot = server.root;
+    }
+
+    if (documentRoot.empty()) {
+        documentRoot = "./html";
+    }
+
+    // Construct file path - remove location prefix from request path if applicable
+    std::string relativePath = requestPath;
+    if (location != 0 && !location->path.empty() && location->path != "/") {
+        // Remove location path prefix from request path
+        if (requestPath.find(location->path) == 0) {
+            relativePath = requestPath.substr(location->path.length());
+            if (relativePath.empty()) {
+                relativePath = "/";
+            }
+        }
+    }
+
+    std::string filePath = documentRoot + relativePath;
+
+    // Write the request body to the file
+    std::ofstream outFile(filePath.c_str(), std::ios::binary | std::ios::trunc);
+    if (!outFile) {
+        m_Logger.error() << "Failed to open file for writing: " << filePath;
+        return createErrorResponse(HTTP_INTERNAL_ERROR, server);
+    }
+
+    const std::string& body = request.getBody();
+    outFile.write(body.c_str(), body.length());
+    outFile.close();
+
+    if (!outFile.good()) {
+        m_Logger.error() << "Failed to write to file: " << filePath;
+        return createErrorResponse(HTTP_INTERNAL_ERROR, server);
+    }
+
+    m_Logger.info() << "File saved successfully: " << filePath << " (" << body.length() << " bytes)";
+
+    HttpResponse response(HTTP_CREATED, m_Logger);
+    response.setHeader("Content-Type", "text/html");
+    response.setBody("<h1>Upload Successful!</h1><p>File saved: " + requestPath + "</p>");
+    return response;
+}
+
 HttpResponse HttpServer::handleDELETE(const HttpRequest& request, const Config::Server& server) {
     const std::string& requestPath = request.getPath();
 
@@ -419,8 +538,19 @@ HttpResponse HttpServer::handleDELETE(const HttpRequest& request, const Config::
         documentRoot = "./html";
     }
 
+    // Remove location prefix from request path if applicable
+    std::string relativePath = requestPath;
+    if (location != 0 && !location->path.empty() && location->path != "/") {
+        if (requestPath.find(location->path) == 0) {
+            relativePath = requestPath.substr(location->path.length());
+            if (relativePath.empty()) {
+                relativePath = "/";
+            }
+        }
+    }
+
     // Construct file path
-    std::string filePath = documentRoot + requestPath;
+    std::string filePath = documentRoot + relativePath;
 
     struct stat fileStat;
     if (stat(filePath.c_str(), &fileStat) != 0) {
@@ -460,8 +590,19 @@ HttpResponse HttpServer::handleHEAD(const HttpRequest& request, const Config::Se
     std::string indexFile;
     std::string documentRoot = determineHEADDocumentRoot(location, server, indexFile);
 
+    // Remove location prefix from request path if applicable
+    std::string relativePath = requestPath;
+    if (location != 0 && !location->path.empty() && location->path != "/") {
+        if (requestPath.find(location->path) == 0) {
+            relativePath = requestPath.substr(location->path.length());
+            if (relativePath.empty()) {
+                relativePath = "/";
+            }
+        }
+    }
+
     // Construct and validate file path
-    std::string filePath = constructHEADFilePath(documentRoot, requestPath, indexFile);
+    std::string filePath = constructHEADFilePath(documentRoot, relativePath, indexFile);
     if (filePath.empty()) {
         return createErrorResponse(HTTP_URI_TOO_LONG, server);
     }
@@ -620,7 +761,12 @@ HttpResponse HttpServer::serveStaticFile(const std::string&    filePath,
             m_Logger.warn() << "Symbolic link rejected for security reasons: " << filePath;
             return createErrorResponse(HTTP_FORBIDDEN, server);
         }
-        // Other error (file doesn't exist, permission denied, etc.)
+        // Check if it failed because of permission denied
+        if (errno == EACCES) {
+            m_Logger.warn() << "No read permission for file: " << filePath;
+            return createErrorResponse(HTTP_FORBIDDEN, server);
+        }
+        // Other error (file doesn't exist, etc.)
         return createErrorResponse(HTTP_NOT_FOUND, server);
     }
     close(testFd);
@@ -909,9 +1055,26 @@ const Config::Location* HttpServer::findMatchingLocation(const Config::Server& s
 
             const std::string& locationPath = location.path;
 
-            if (path.find(locationPath) == 0 && locationPath.length() > bestMatchLength) {
-                bestMatch = &location;
-                bestMatchLength = locationPath.length();
+            // Check if path starts with locationPath
+            if (path.find(locationPath) == 0) {
+                // Verify this is a valid directory match
+                bool isValidMatch = false;
+
+                if (locationPath == "/") {
+                    // Root location matches everything
+                    isValidMatch = true;
+                } else if (path.length() == locationPath.length()) {
+                    // Exact match (e.g., /upload == /upload)
+                    isValidMatch = true;
+                } else if (path[locationPath.length()] == '/') {
+                    // Directory match (e.g., /upload/file matches /upload)
+                    isValidMatch = true;
+                }
+
+                if (isValidMatch && locationPath.length() > bestMatchLength) {
+                    bestMatch = &location;
+                    bestMatchLength = locationPath.length();
+                }
             }
         }
 
@@ -958,7 +1121,8 @@ bool HttpServer::isCGIFile(const std::string& filePath) {
     }
 
     std::string extension = filePath.substr(dotPos);
-    return (extension == ".php" || extension == ".py" || extension == ".cgi" || extension == ".pl");
+    return (extension == ".php" || extension == ".py" || extension == ".cgi" || extension == ".pl" ||
+            extension == ".bla");
 }
 
 std::string HttpServer::resolvePath(const std::string&      requestPath,
@@ -1039,10 +1203,40 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
         interpreter = "python3";
     } else if (filePath.find(".pl") != std::string::npos) {
         interpreter = "perl";
+    } else if (filePath.find(".bla") != std::string::npos) {
+        interpreter = "./cgi_test";
     } else {
         // For .cgi files, execute directly
         interpreter = "";
     }
+
+    // Prepare request body BEFORE fork() so we know content length
+    std::string requestBody;
+    if (request.getMethod() == "POST") {
+        if (request.hasLargeUpload()) {
+            requestBody = request.readBodyFromTempFile();
+        } else {
+            requestBody = request.getBody();
+        }
+    }
+
+    // Calculate PATH_INFO BEFORE fork() to avoid using object methods in child
+    std::string path = request.getPath();
+    std::string queryString;
+    size_t      queryPos = path.find('?');
+    if (queryPos != std::string::npos) {
+        queryString = path.substr(queryPos + 1);
+        path = path.substr(0, queryPos);
+    }
+
+    // PATH_INFO for CGI is the path AFTER the script filename
+    // For /directory/youpi.bla -> PATH_INFO should be empty (no extra path)
+    // For /directory/youpi.bla/extra/path -> PATH_INFO should be /extra/path
+    // Currently supporting direct script execution only, so PATH_INFO is empty
+    std::string pathInfo = "";
+
+    m_Logger.info() << "CGI PATH_INFO set to empty for direct script execution, path: '" << path
+                    << "'";
 
     // Create pipes for CGI communication
     int stdinPipe[2];
@@ -1079,22 +1273,16 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
         close(stdoutPipe[1]);
 
         // Set environment variables according to CGI standard
+        // Use pre-calculated values from before fork()
         setenv("REQUEST_METHOD", request.getMethod().c_str(), 1);
-
-        // Extract query string from path (everything after '?')
-        std::string path = request.getPath();
-        std::string queryString;
-        size_t      queryPos = path.find('?');
-        if (queryPos != std::string::npos) {
-            queryString = path.substr(queryPos + 1);
-            path = path.substr(0, queryPos);
-        }
         setenv("QUERY_STRING", queryString.c_str(), 1);
-        setenv("PATH_INFO", path.c_str(), 1);
+        setenv("PATH_INFO", pathInfo.c_str(), 1);
+        setenv("SCRIPT_NAME", path.c_str(), 1);
+        setenv("SERVER_PROTOCOL", request.getVersion().c_str(), 1);
 
         // Content-related variables
         std::ostringstream contentLengthStream;
-        contentLengthStream << request.getBody().length();
+        contentLengthStream << requestBody.length();
         std::string contentLength = contentLengthStream.str();
         setenv("CONTENT_LENGTH", contentLength.c_str(), 1);
         setenv("CONTENT_TYPE", request.getHeader("Content-Type").c_str(), 1);
@@ -1103,7 +1291,15 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
         setenv("SCRIPT_NAME", path.c_str(), 1);
         setenv("SERVER_SOFTWARE", "webserv/1.0", 1);
         setenv("SERVER_NAME", "localhost", 1);
-        setenv("SERVER_PORT", "8080", 1);
+
+        // Get actual server port
+        std::ostringstream portStream;
+        if (!server.listens.empty()) {
+            portStream << server.listens[0].second;
+        } else {
+            portStream << "8080";  // fallback
+        }
+        setenv("SERVER_PORT", portStream.str().c_str(), 1);
 
         // HTTP headers as environment variables
         setenv("HTTP_HOST", request.getHeader("Host").c_str(), 1);
@@ -1113,14 +1309,12 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
         if (interpreter.empty()) {
             // Execute script directly (for .cgi files)
             char* argv[] = {const_cast<char*>(filePath.c_str()), NULL};
-            char* envp[] = {NULL};  // Basic environment
-            execve(filePath.c_str(), argv, envp);
+            execve(filePath.c_str(), argv, environ);
         } else {
-            // Execute with interpreter (for .php, .py, .pl files)
+            // Execute with interpreter (for .php, .py, .pl, .bla files)
             char* argv[] = {const_cast<char*>(interpreter.c_str()),
                             const_cast<char*>(filePath.c_str()), NULL};
-            char* envp[] = {NULL};  // Basic environment
-            execve(interpreter.c_str(), argv, envp);
+            execve(interpreter.c_str(), argv, environ);
         }
 
         // If execve fails
@@ -1133,8 +1327,8 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
         close(stdoutPipe[1]);
 
         // Send request body to CGI if needed (for POST)
-        if (request.getMethod() == "POST" && !request.getBody().empty()) {
-            write(stdinPipe[1], request.getBody().c_str(), request.getBody().length());
+        if (!requestBody.empty()) {
+            write(stdinPipe[1], requestBody.c_str(), requestBody.length());
         }
         close(stdinPipe[1]);
 
@@ -1200,11 +1394,8 @@ HttpResponse HttpServer::createErrorResponse(int statusCode, const Config::Serve
     switch (statusCode) {
         case HTTP_BAD_REQUEST:
             return HttpResponse::createBadRequest();
-        case HTTP_FORBIDDEN: {
-            HttpResponse response = HttpResponse::createBadRequest();
-            response.setStatus(HTTP_FORBIDDEN, "Forbidden");
-            return response;
-        }
+        case HTTP_FORBIDDEN:
+            return HttpResponse::createForbidden();
         case HTTP_NOT_FOUND:
             return HttpResponse::createNotFound();
         case HTTP_METHOD_NOT_ALLOWED:

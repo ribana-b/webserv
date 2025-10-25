@@ -35,7 +35,8 @@ UploadManager::UploadManager() :
     m_BytesWritten(0),
     m_IsActive(false),
     m_IsComplete(false),
-    m_AutoCleanup(true) {}
+    m_AutoCleanup(true),
+    m_ParserState(MULTIPART_DISABLED) {}
 
 UploadManager::UploadManager(const Logger& logger) :
     m_Logger(logger),
@@ -44,7 +45,8 @@ UploadManager::UploadManager(const Logger& logger) :
     m_BytesWritten(0),
     m_IsActive(false),
     m_IsComplete(false),
-    m_AutoCleanup(true) {}
+    m_AutoCleanup(true),
+    m_ParserState(MULTIPART_DISABLED) {}
 
 UploadManager::~UploadManager() {
     if (m_AutoCleanup) {
@@ -84,6 +86,10 @@ UploadManager& UploadManager::operator=(const UploadManager& that) {
 /* @------------------------------------------------------------------------@ */
 
 bool UploadManager::startLargeUpload(std::size_t contentLength) {
+    return startLargeUpload(contentLength, "");
+}
+
+bool UploadManager::startLargeUpload(std::size_t contentLength, const std::string& boundary) {
     if (m_IsActive) {
         m_Logger.warn() << "UploadManager: Cannot start new upload, one already in progress";
         return false;
@@ -92,6 +98,16 @@ bool UploadManager::startLargeUpload(std::size_t contentLength) {
     m_ExpectedSize = contentLength;
     m_BytesWritten = 0;
     m_IsComplete = false;
+    m_ParserBuffer.clear();
+
+    if (!boundary.empty()) {
+        m_Boundary = "\r\n--" + boundary;
+        m_ParserState = SEARCHING_HEADERS;
+        m_Logger.info() << "UploadManager: Multipart mode enabled with boundary: " << boundary;
+    } else {
+        m_Boundary.clear();
+        m_ParserState = MULTIPART_DISABLED;
+    }
 
     if (!createTempFile()) {
         m_Logger.error() << "UploadManager: Failed to create temporary file";
@@ -110,25 +126,57 @@ bool UploadManager::writeChunk(const char* data, std::size_t size) {
         return false;
     }
 
-    if (m_BytesWritten + size > m_ExpectedSize) {
-        m_Logger.warn() << "UploadManager: Chunk would exceed expected size ("
-                        << (m_BytesWritten + size) << " > " << m_ExpectedSize << ")";
-        return false;
+    // If multipart parsing is disabled, write directly
+    if (m_ParserState == MULTIPART_DISABLED) {
+        ssize_t bytesWritten = write(m_TempFd, data, size);
+        if (bytesWritten == -1 || static_cast<std::size_t>(bytesWritten) != size) {
+            m_Logger.error() << "UploadManager: Failed to write chunk to temp file";
+            return false;
+        }
+        m_BytesWritten += size;
+        return true;
     }
 
-    ssize_t bytesWritten = write(m_TempFd, data, size);
-    if (bytesWritten == -1) {
-        m_Logger.error() << "UploadManager: Failed to write chunk to temp file";
-        return false;
-    }
+    // Multipart parsing mode
+    for (std::size_t i = 0; i < size; ++i) {
+        m_ParserBuffer += data[i];
 
-    if (static_cast<std::size_t>(bytesWritten) != size) {
-        m_Logger.error() << "UploadManager: Partial write (" << bytesWritten << "/" << size
-                         << " bytes)";
-        return false;
-    }
+        if (m_ParserState == SEARCHING_HEADERS) {
+            // Look for end of headers ("\r\n\r\n")
+            if (m_ParserBuffer.length() >= 4) {
+                std::size_t headerEnd = m_ParserBuffer.find("\r\n\r\n");
+                if (headerEnd != std::string::npos) {
+                    m_ParserState = READING_FILE_DATA;
+                    m_ParserBuffer.clear();
+                    m_Logger.info() << "UploadManager: Found end of multipart headers, starting file data";
+                }
+            }
+        } else if (m_ParserState == READING_FILE_DATA) {
+            // Keep buffer size manageable (boundary length + safety margin)
+            std::size_t maxBufferSize = m_Boundary.length() + 10;
 
-    m_BytesWritten += size;
+            if (m_ParserBuffer.length() > maxBufferSize) {
+                // Write oldest byte to file
+                char byte = m_ParserBuffer[0];
+                if (write(m_TempFd, &byte, 1) != 1) {
+                    m_Logger.error() << "UploadManager: Failed to write byte to temp file";
+                    return false;
+                }
+                m_BytesWritten++;
+                m_ParserBuffer.erase(0, 1);
+            }
+
+            // Check if buffer contains boundary
+            if (m_ParserBuffer.find(m_Boundary) != std::string::npos) {
+                m_ParserState = DETECTED_BOUNDARY;
+                m_IsComplete = true;
+                closeTempFile();
+                m_Logger.info() << "UploadManager: Detected multipart boundary, upload complete ("
+                               << m_BytesWritten << " bytes of actual file data)";
+                return true;
+            }
+        }
+    }
 
     return true;
 }
@@ -139,10 +187,20 @@ bool UploadManager::finishUpload() {
         return false;
     }
 
-    if (m_BytesWritten != m_ExpectedSize) {
-        m_Logger.warn() << "UploadManager: Upload incomplete (" << m_BytesWritten << "/"
-                        << m_ExpectedSize << " bytes)";
-        return false;
+    // For multipart uploads, check if boundary was detected
+    if (m_ParserState != MULTIPART_DISABLED) {
+        if (m_ParserState != DETECTED_BOUNDARY && !m_IsComplete) {
+            m_Logger.warn() << "UploadManager: Multipart upload incomplete, boundary not detected";
+            return false;
+        }
+        // Multipart completed successfully when boundary detected
+    } else {
+        // For non-multipart uploads, check exact byte count
+        if (m_BytesWritten != m_ExpectedSize) {
+            m_Logger.warn() << "UploadManager: Upload incomplete (" << m_BytesWritten << "/"
+                            << m_ExpectedSize << " bytes)";
+            return false;
+        }
     }
 
     closeTempFile();

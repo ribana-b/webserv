@@ -53,23 +53,43 @@
         // Simple JavaScript for file management
         function refreshFiles() {
             document.getElementById('filesList').innerHTML = '<p>Refreshing...</p>';
-            // Simulate file listing - in a real implementation this would fetch from server
-            setTimeout(() => {
-                document.getElementById('filesList').innerHTML = `
-                    <div class="file-item">
-                        <span>📄 index.html (61 bytes)</span>
-                        <button class="delete-btn" onclick="deleteFile('/index.html')">Delete</button>
-                    </div>
-                    <div class="file-item">
-                        <span>📄 test.txt (24 bytes)</span>
-                        <button class="delete-btn" onclick="deleteFile('/test.txt')">Delete</button>
-                    </div>
-                    <div class="file-item">
-                        <span>📄 upload.html (this file)</span>
-                        <button class="delete-btn" onclick="deleteFile('/upload.html')">Delete</button>
-                    </div>
-                `;
-            }, 500);
+
+            // Fetch actual file listing from server using autoindex
+            fetch('/upload/')
+                .then(response => response.text())
+                .then(html => {
+                    // Parse the HTML to extract file links
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+                    const links = doc.querySelectorAll('a.file');
+
+                    if (links.length === 0) {
+                        document.getElementById('filesList').innerHTML = '<p>No files found</p>';
+                        return;
+                    }
+
+                    let filesHtml = '';
+                    links.forEach(link => {
+                        // Get file name (before the size span)
+                        const fullText = link.textContent;
+                        const sizeSpan = link.querySelector('.size');
+                        const fileName = sizeSpan ? fullText.replace(sizeSpan.textContent, '').trim() : fullText.trim();
+                        const filePath = link.getAttribute('href');
+                        const size = sizeSpan ? sizeSpan.textContent : 'unknown';
+
+                        filesHtml += `
+                            <div class="file-item">
+                                <span>📄 ${fileName} (${size})</span>
+                                <button class="delete-btn" onclick="deleteFile('${filePath}')">Delete</button>
+                            </div>
+                        `;
+                    });
+
+                    document.getElementById('filesList').innerHTML = filesHtml;
+                })
+                .catch(error => {
+                    document.getElementById('filesList').innerHTML = '<p class="error">Error loading files: ' + error + '</p>';
+                });
         }
         
         function deleteFile(filePath) {
@@ -109,14 +129,22 @@
                 method: 'POST',
                 body: formData
             })
-            .then(response => response.text())
+            .then(response => {
+                if (!response.ok) {
+                    if (response.status === 413) {
+                        throw new Error('File too large. Maximum allowed size is 10MB.');
+                    }
+                    throw new Error('Upload failed with status ' + response.status);
+                }
+                return response.text();
+            })
             .then(data => {
                 document.getElementById('uploadStatus').innerHTML = '<p class="success">Upload successful!</p>';
                 fileInput.value = '';
                 refreshFiles();
             })
             .catch(error => {
-                document.getElementById('uploadStatus').innerHTML = '<p class="error">Upload failed: ' + error + '</p>';
+                document.getElementById('uploadStatus').innerHTML = '<p class="error">Upload failed: ' + error.message + '</p>';
             });
         });
     </script>

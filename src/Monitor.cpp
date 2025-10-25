@@ -104,6 +104,9 @@ void Monitor::closePollFd(const int fdesc) {
     // Clean up any upload state for this file descriptor
     removeUploadState(fdesc);
 
+    // Clean up any request buffer for this file descriptor
+    removeRequestBuffer(fdesc);
+
     close(fdesc);
     while (itr < this->fdCount && fdesc != this->fds[itr].fd) {
         itr++;
@@ -118,6 +121,9 @@ void Monitor::closePollFd(const int fdesc) {
 
 void Monitor::cleanPollFds() {
     for (int i = 0; i < this->fdCount; i++) {
+        // Clean up request buffers before closing
+        removeRequestBuffer(this->fds[i].fd);
+        removeUploadState(this->fds[i].fd);
         close(this->fds[i].fd);
         this->fds[i].fd = -1;
     }

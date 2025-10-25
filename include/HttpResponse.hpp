@@ -59,6 +59,7 @@ public:
     static HttpResponse createNotFound(const std::string& message = "");
     static HttpResponse createInternalError(const std::string& message = "");
     static HttpResponse createBadRequest(const std::string& message = "");
+    static HttpResponse createForbidden(const std::string& message = "");
     static HttpResponse createMethodNotAllowed(const std::string& message = "");
 
 private:

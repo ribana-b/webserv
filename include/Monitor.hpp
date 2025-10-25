@@ -3,10 +3,10 @@
 /*                                                        :::      ::::::::   */
 /*   Monitor.hpp                                        :+:      :+:    :+:   */
 /*                                                    +:+ +:+         +:+     */
-/*   By: disantam <disantam@student.42malaga.com>   +#+  +:+       +#+        */
+/*   By: mancorte <mancorte@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/07/15 13:37:28 by disantam          #+#    #+#             */
-/*   Updated: 2025/08/02 20:46:26 by ribana-b         ###   ########.com      */
+/*   Updated: 2025/10/26 01:16:54 by mancorte         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -16,7 +16,7 @@
 #define POLLFD_SIZE           10
 #define LISTEN_BACKLOG        10
 #define POLL_WAIT             30000
-#define BUFFER_SIZE           500
+#define BUFFER_SIZE           5000
 #define CONTENT_LENGTH_HEADER 15
 #define DEFAULT_SERVER_PORT   8080
 #define POLL_TIMEOUT_MS       5000
@@ -49,6 +49,12 @@ struct UploadState {
         manager(mgr), totalReceived(received), totalContentLength(total), rawRequest(request) {}
 };
 
+struct RequestBuffer {
+    std::string buffer;  // Accumulated data from multiple recv() calls
+
+    RequestBuffer() : buffer() {}
+};
+
 /* @------------------------------------------------------------------------@ */
 /* |                             Class Section                              | */
 /* @------------------------------------------------------------------------@ */
@@ -69,6 +75,7 @@ private:
     int                          fdCount;
     int                          maxFd;
     std::map<int, UploadState *> activeUploads;
+    std::map<int, RequestBuffer *> requestBuffers;  // Buffer incomplete HTTP requests
 
     enum InitResult { INIT_SUCCESS, INIT_MEMORY_ERROR, INIT_LISTEN_ERROR };
 
@@ -127,6 +134,11 @@ private:
     void         addUploadState(int fdesc, UploadState *state);
     void         removeUploadState(int fdesc);
     ExecResult   continueUpload(int fdesc, int &ready);
+
+    // Request buffer management
+    RequestBuffer *getRequestBuffer(int fdesc);
+    void           addRequestBuffer(int fdesc, RequestBuffer *buffer);
+    void           removeRequestBuffer(int fdesc);
 
 public:
     Monitor(const Logger &logger);

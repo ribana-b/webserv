@@ -10,6 +10,7 @@
 /*                                                                            */
 /* ************************************************************************** */
 
+#include <arpa/inet.h>  // For ntohs
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -98,6 +99,12 @@ Monitor::ExecResult Monitor::eventExecRequest(const int fdesc, int &ready) {
 
     std::string rawRequest = readHttpRequest(fdesc);
 
+    // If request is incomplete (empty string returned), wait for more data
+    if (rawRequest.empty()) {
+        ready--;
+        return Monitor::EXEC_SUCCESS;
+    }
+
     return processHttpRequest(fdesc, rawRequest, ready);
 }
 
@@ -105,9 +112,29 @@ Monitor::ExecResult Monitor::handleLargeUpload(const int fdesc, const std::strin
                                                const UploadInfo &uploadInfo, int &ready) {
     Logger logger(std::cout, true);
 
+    // Extract boundary from Content-Type header if present
+    std::string boundary;
+    std::size_t boundaryPos = rawRequest.find("boundary=");
+    if (boundaryPos != std::string::npos) {
+        std::size_t start = boundaryPos + 9;  // Length of "boundary="
+        std::size_t end = rawRequest.find("\r\n", start);
+        if (end == std::string::npos) {
+            end = rawRequest.find(";", start);
+        }
+        if (end == std::string::npos) {
+            end = rawRequest.length();
+        }
+        boundary = rawRequest.substr(start, end - start);
+        logger.info() << "Extracted multipart boundary: " << boundary;
+    }
+
     // Create UploadManager for streaming
     UploadManager *uploadManager = new UploadManager(logger);
-    if (!uploadManager->startLargeUpload(uploadInfo.totalContentLength)) {
+    bool startResult = boundary.empty()
+                       ? uploadManager->startLargeUpload(uploadInfo.totalContentLength)
+                       : uploadManager->startLargeUpload(uploadInfo.totalContentLength, boundary);
+
+    if (!startResult) {
         logger.error() << "Failed to start large upload streaming";
         delete uploadManager;
         this->closePollFd(fdesc);
@@ -182,7 +209,7 @@ Monitor::ExecResult Monitor::handleLargeUpload(const int fdesc, const std::strin
     }
 
     // Check if upload completed immediately
-    if (state->totalReceived >= state->totalContentLength) {
+    if (state->totalReceived >= state->totalContentLength || uploadManager->isComplete()) {
         if (!uploadManager->finishUpload()) {
             logger.error() << "Failed to finish large upload";
             uploadManager->cleanup();
@@ -214,7 +241,11 @@ Monitor::ExecResult Monitor::handleLargeUpload(const int fdesc, const std::strin
             }
             httpResponse = this->httpServer->processRequest(httpRequest, serverPort);
         } else {
-            logger.warn() << "Invalid HTTP request received";
+            logger.warn() << "Invalid HTTP request received (large upload completion path)";
+            logger.warn() << "Method: '" << httpRequest.getMethod() << "' Path: '" << httpRequest.getPath()
+                         << "' Version: '" << httpRequest.getVersion() << "'";
+            logger.warn() << "Headers only (first 200 chars): "
+                         << headersOnly.substr(0, std::min(headersOnly.length(), size_t(200)));
             httpResponse = HttpResponse::createBadRequest();
         }
 
@@ -230,31 +261,89 @@ Monitor::ExecResult Monitor::handleLargeUpload(const int fdesc, const std::strin
 }
 
 std::string Monitor::readHttpRequest(int fdesc) {
-    ssize_t     bytesRead = 1;
-    char        buffer[BUFFER_SIZE + 1];
-    std::string rawRequest;
+    char    buffer[BUFFER_SIZE + 1];
+    ssize_t bytesRead;
 
-    while (bytesRead != 0) {
-        bytesRead = recv(fdesc, buffer, BUFFER_SIZE, 0);
-        if (bytesRead < 0) {
-            break;
-        }
-        buffer[bytesRead] = '\0';
-        rawRequest += buffer;
+    // Get or create request buffer for this connection
+    RequestBuffer *reqBuffer = getRequestBuffer(fdesc);
+    if (reqBuffer == NULL) {
+        reqBuffer = new RequestBuffer();
+        addRequestBuffer(fdesc, reqBuffer);
+    }
 
-        std::size_t headerEndPos = rawRequest.find("\r\n\r\n");
-        if (headerEndPos != std::string::npos) {
-            std::size_t totalContentLength;
-            std::string fullRequest = rawRequest;
-            if (processContentLength(rawRequest, headerEndPos, totalContentLength, fullRequest,
-                                     fdesc)) {
-                return fullRequest;
+    // SINGLE recv() call per poll() event - strict compliance with subject
+    bytesRead = recv(fdesc, buffer, BUFFER_SIZE, 0);
+    if (bytesRead <= 0) {
+        // Connection closed or error
+        return reqBuffer->buffer;
+    }
+
+    buffer[bytesRead] = '\0';
+    reqBuffer->buffer += buffer;
+
+    // Check if we have complete headers
+    std::size_t headerEndPos = reqBuffer->buffer.find("\r\n\r\n");
+    if (headerEndPos == std::string::npos) {
+        // Headers not complete yet, return empty to signal "not ready"
+        return "";
+    }
+
+    // Check for Transfer-Encoding: chunked
+    std::string transferEncoding;
+    std::size_t tePos = reqBuffer->buffer.find("Transfer-Encoding:");
+    if (tePos != std::string::npos && tePos < headerEndPos) {
+        std::size_t teEnd = reqBuffer->buffer.find("\r\n", tePos);
+        if (teEnd != std::string::npos) {
+            transferEncoding = reqBuffer->buffer.substr(tePos + 18, teEnd - tePos - 18);
+            // Trim whitespace
+            while (!transferEncoding.empty() && transferEncoding[0] == ' ') {
+                transferEncoding = transferEncoding.substr(1);
             }
-            break;
         }
     }
 
-    return rawRequest;
+    // Convert to lowercase for case-insensitive comparison
+    std::string lowerTE = transferEncoding;
+    for (std::size_t i = 0; i < lowerTE.length(); i++) {
+        if (lowerTE[i] >= 'A' && lowerTE[i] <= 'Z') {
+            lowerTE[i] = lowerTE[i] + 32;
+        }
+    }
+
+    if (lowerTE.find("chunked") != std::string::npos) {
+        // Chunked encoding - check if we have complete body (ends with 0\r\n\r\n)
+        // Optimize: check only the end of buffer instead of searching entire 100MB
+        std::size_t bufLen = reqBuffer->buffer.length();
+        if (bufLen < headerEndPos + 5) {
+            return "";  // Too short to contain terminator
+        }
+
+        // Check if buffer ends with "0\r\n\r\n" (last 5 characters)
+        std::string ending = reqBuffer->buffer.substr(bufLen - 5);
+        if (ending != "0\r\n\r\n") {
+            return "";  // Not complete yet, wait for more data
+        }
+
+        // Complete chunked request
+        std::string completeRequest = reqBuffer->buffer;
+        removeRequestBuffer(fdesc);
+        return completeRequest;
+    }
+
+    // Headers complete, check for Content-Length
+    std::size_t totalContentLength;
+    std::string fullRequest = reqBuffer->buffer;
+    if (processContentLength(reqBuffer->buffer, headerEndPos, totalContentLength, fullRequest,
+                             fdesc)) {
+        // Request complete with body
+        removeRequestBuffer(fdesc);
+        return fullRequest;
+    }
+
+    // Headers complete, no Content-Length (GET, DELETE, HEAD, etc.)
+    std::string completeRequest = reqBuffer->buffer;
+    removeRequestBuffer(fdesc);
+    return completeRequest;
 }
 
 bool Monitor::processContentLength(const std::string &rawRequest, std::size_t headerEndPos,
@@ -328,6 +417,68 @@ Monitor::ExecResult Monitor::processHttpRequest(int fdesc, const std::string &ra
             if (UploadManager::isLargeFile(contentLength)) {
                 logger.info() << "Large upload detected (" << contentLength
                               << " bytes), using streaming to disk";
+
+                // Validate against client_max_body_size BEFORE starting streaming
+                HttpRequest tempRequest;
+                tempRequest.parse(rawRequest);
+                std::string requestPath = tempRequest.getPath();
+
+                // Find server by port
+                int serverPort = this->getPortForConnection(fdesc);
+                const Config::Server* matchingServer = NULL;
+                for (std::size_t i = 0; i < this->servers.size(); ++i) {
+                    for (std::size_t j = 0; j < this->servers[i].listens.size(); ++j) {
+                        if (ntohs(this->servers[i].listens[j].second) == serverPort) {
+                            matchingServer = &this->servers[i];
+                            break;
+                        }
+                    }
+                    if (matchingServer) break;
+                }
+
+                // Find matching location
+                if (matchingServer != NULL) {
+                    const Config::Location* matchingLocation = NULL;
+                    std::size_t bestMatchLength = 0;
+
+                    for (std::size_t i = 0; i < matchingServer->locations.size(); ++i) {
+                        const Config::Location& loc = matchingServer->locations[i];
+                        if (requestPath.find(loc.path) == 0) {
+                            // Verify valid directory match
+                            bool isValidMatch = false;
+                            if (loc.path == "/") {
+                                isValidMatch = true;
+                            } else if (requestPath.length() == loc.path.length()) {
+                                isValidMatch = true;
+                            } else if (requestPath[loc.path.length()] == '/') {
+                                isValidMatch = true;
+                            }
+
+                            if (isValidMatch && loc.path.length() > bestMatchLength) {
+                                matchingLocation = &loc;
+                                bestMatchLength = loc.path.length();
+                            }
+                        }
+                    }
+
+                    // Check client_max_body_size limit
+                    if (matchingLocation != NULL && matchingLocation->clientMaxBodySize > 0 &&
+                        contentLength > matchingLocation->clientMaxBodySize) {
+                        logger.warn() << "Large upload rejected: " << contentLength << " > "
+                                     << matchingLocation->clientMaxBodySize << " (client_max_body_size)";
+
+                        // Send 413 Payload Too Large
+                        HttpResponse errorResponse(HTTP_PAYLOAD_TOO_LARGE, logger);
+                        errorResponse.setHeader("Content-Type", "text/html");
+                        errorResponse.setBody("<h1>413 Payload Too Large</h1>"
+                                            "<p>Upload size exceeds client_max_body_size limit</p>");
+                        sendHttpResponse(fdesc, errorResponse);
+                        ready--;
+                        return Monitor::EXEC_SUCCESS;
+                    }
+                }
+
+                // Validation passed, proceed with streaming
                 Monitor::HeaderPosition headerPos(headerEndPos);
                 Monitor::ContentLength  contentLen(contentLength);
                 UploadInfo              uploadInfo(headerPos, contentLen);
@@ -338,6 +489,13 @@ Monitor::ExecResult Monitor::processHttpRequest(int fdesc, const std::string &ra
 
     // Process regular request
     HttpRequest httpRequest;
+    logger.info() << "About to parse raw request (length: " << rawRequest.length() << " bytes)";
+    if (rawRequest.length() > 0) {
+        logger.info() << "Raw request first 200 chars: '"
+                     << rawRequest.substr(0, std::min(rawRequest.length(), size_t(200))) << "'";
+    } else {
+        logger.warn() << "Raw request is EMPTY!";
+    }
     httpRequest.parse(rawRequest);
 
     HttpResponse httpResponse = generateHttpResponse(httpRequest, fdesc);
@@ -440,7 +598,10 @@ HttpResponse Monitor::generateHttpResponse(const HttpRequest &httpRequest, int f
         return this->httpServer->processRequest(httpRequest, serverPort);
     }
 
-    logger.warn() << "Invalid HTTP request received";
+    logger.warn() << "Invalid HTTP request received (generateHttpResponse)";
+    logger.warn() << "Request marked as invalid by HttpRequest parser";
+    logger.warn() << "Method: '" << httpRequest.getMethod() << "' Path: '" << httpRequest.getPath()
+                  << "' Version: '" << httpRequest.getVersion() << "'";
     return HttpResponse::createBadRequest();
 }
 
@@ -464,6 +625,26 @@ void Monitor::removeUploadState(int fdesc) {
     if (it != activeUploads.end()) {
         delete it->second;
         activeUploads.erase(it);
+    }
+}
+
+RequestBuffer *Monitor::getRequestBuffer(int fdesc) {
+    std::map<int, RequestBuffer *>::iterator it = requestBuffers.find(fdesc);
+    if (it != requestBuffers.end()) {
+        return it->second;
+    }
+    return NULL;
+}
+
+void Monitor::addRequestBuffer(int fdesc, RequestBuffer *buffer) {
+    requestBuffers[fdesc] = buffer;
+}
+
+void Monitor::removeRequestBuffer(int fdesc) {
+    std::map<int, RequestBuffer *>::iterator it = requestBuffers.find(fdesc);
+    if (it != requestBuffers.end()) {
+        delete it->second;
+        requestBuffers.erase(it);
     }
 }
 
@@ -505,7 +686,7 @@ Monitor::ExecResult Monitor::continueUpload(int fdesc, int &ready) {
 
     uploadState->totalReceived += bytesToWrite;
 
-    if (uploadState->totalReceived >= uploadState->totalContentLength) {
+    if (uploadState->totalReceived >= uploadState->totalContentLength || uploadState->manager->isComplete()) {
         if (!uploadState->manager->finishUpload()) {
             logger.error() << "Failed to finish large upload";
             uploadState->manager->cleanup();
@@ -537,7 +718,11 @@ Monitor::ExecResult Monitor::continueUpload(int fdesc, int &ready) {
             }
             httpResponse = this->httpServer->processRequest(httpRequest, serverPort);
         } else {
-            logger.warn() << "Invalid HTTP request received";
+            logger.warn() << "Invalid HTTP request received (active upload continuation path)";
+            logger.warn() << "Method: '" << httpRequest.getMethod() << "' Path: '" << httpRequest.getPath()
+                         << "' Version: '" << httpRequest.getVersion() << "'";
+            logger.warn() << "Headers only (first 200 chars): "
+                         << headersOnly.substr(0, std::min(headersOnly.length(), size_t(200)));
             httpResponse = HttpResponse::createBadRequest();
         }
 

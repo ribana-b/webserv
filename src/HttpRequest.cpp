@@ -221,6 +221,33 @@ bool HttpRequest::parseHeaders(const std::string& headerSection) {
 }
 
 bool HttpRequest::parseBody(const std::string& rawData, std::size_t headerEnd) {
+    // Check for Transfer-Encoding: chunked
+    std::string transferEncoding = getHeader("Transfer-Encoding");
+    std::string lowerTE = toLowerCase(transferEncoding);
+
+    const_cast<Logger&>(m_Logger).info()
+        << "parseBody: Transfer-Encoding='" << transferEncoding << "' lowercase='" << lowerTE
+        << "'";
+
+    if (lowerTE.find("chunked") != std::string::npos) {
+        // Handle chunked encoding
+        std::size_t bodyStart = headerEnd + 4;  // Skip \r\n\r\n
+        if (bodyStart >= rawData.length()) {
+            m_Body = "";
+            const_cast<Logger&>(m_Logger).info() << "parseBody: No body data after headers";
+            return true;
+        }
+
+        std::string chunkedData = rawData.substr(bodyStart);
+        const_cast<Logger&>(m_Logger).info()
+            << "parseBody: Decoding chunked body, raw size: " << chunkedData.length();
+        m_Body = decodeChunkedBody(chunkedData);
+        const_cast<Logger&>(m_Logger).info()
+            << "parseBody: Decoded body size: " << m_Body.length();
+        return true;
+    }
+
+    // Normal Content-Length handling
     std::size_t contentLength = getContentLength();
 
     if (contentLength == 0) {
@@ -316,4 +343,88 @@ std::string HttpRequest::readBodyFromTempFile() const {
 
     std::string content = buffer.str();
     return content;
+}
+
+/* @------------------------------------------------------------------------@ */
+/* |                    Chunked Encoding Helper Methods                     | */
+/* @------------------------------------------------------------------------@ */
+
+std::size_t HttpRequest::hexToSize(const std::string& hex) {
+    std::size_t result = 0;
+    for (std::size_t i = 0; i < hex.length(); i++) {
+        char c = hex[i];
+        if (c >= '0' && c <= '9') {
+            result = result * 16 + (c - '0');
+        } else if (c >= 'a' && c <= 'f') {
+            result = result * 16 + (c - 'a' + 10);
+        } else if (c >= 'A' && c <= 'F') {
+            result = result * 16 + (c - 'A' + 10);
+        } else {
+            break;  // Stop on first non-hex character
+        }
+    }
+    return result;
+}
+
+std::string HttpRequest::decodeChunkedBody(const std::string& chunkedData) {
+    std::string decoded;
+    std::size_t pos = 0;
+    int         chunkCount = 0;
+
+    while (pos < chunkedData.length()) {
+        // Skip any leading whitespace/empty lines
+        while (pos < chunkedData.length() &&
+               (chunkedData[pos] == '\r' || chunkedData[pos] == '\n' || chunkedData[pos] == ' ')) {
+            pos++;
+        }
+
+        if (pos >= chunkedData.length()) {
+            break;
+        }
+
+        // Read chunk size (hex number until \r\n)
+        std::size_t crlfPos = chunkedData.find("\r\n", pos);
+        if (crlfPos == std::string::npos) {
+            const_cast<Logger&>(m_Logger).warn()
+                << "Chunk decode: No CRLF found at pos " << pos;
+            break;
+        }
+
+        std::string sizeStr = chunkedData.substr(pos, crlfPos - pos);
+
+        // Skip if size string is empty (another empty line)
+        if (sizeStr.empty()) {
+            pos = crlfPos + 2;
+            continue;
+        }
+
+        std::size_t chunkSize = hexToSize(sizeStr);
+
+        chunkCount++;
+        if (chunkCount <= 3) {  // Log first 3 chunks
+            const_cast<Logger&>(m_Logger).info() << "Chunk #" << chunkCount << ": size hex='"
+                                                 << sizeStr << "' decimal=" << chunkSize;
+        }
+
+        if (chunkSize == 0) {
+            const_cast<Logger&>(m_Logger).info()
+                << "Chunk decode: Found terminator after " << chunkCount << " chunks, decoded "
+                << decoded.length() << " bytes";
+            break;
+        }
+
+        pos = crlfPos + 2;  // Skip \r\n after size
+
+        // Read chunk data
+        if (pos + chunkSize > chunkedData.length()) {
+            const_cast<Logger&>(m_Logger).warn()
+                << "Chunk decode: Incomplete chunk at pos " << pos;
+            break;
+        }
+
+        decoded += chunkedData.substr(pos, chunkSize);
+        pos += chunkSize + 2;  // Skip data and trailing \r\n
+    }
+
+    return decoded;
 }

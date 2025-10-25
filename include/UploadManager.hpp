@@ -36,6 +36,14 @@
 
 class UploadManager {
 public:
+    enum MultipartState {
+        MULTIPART_DISABLED,
+        SEARCHING_HEADERS,
+        READING_FILE_DATA,
+        DETECTED_BOUNDARY,
+        COMPLETE
+    };
+
     UploadManager();
     UploadManager(const Logger& logger);
     ~UploadManager();
@@ -44,6 +52,7 @@ public:
 
     // Main streaming methods
     bool startLargeUpload(std::size_t contentLength);
+    bool startLargeUpload(std::size_t contentLength, const std::string& boundary);
     bool writeChunk(const char* data, std::size_t size);
     bool finishUpload();
     void cleanup();
@@ -64,14 +73,17 @@ public:
     static bool isLargeFile(std::size_t contentLength);
 
 private:
-    Logger      m_Logger;
-    std::string m_TempFilePath;
-    int         m_TempFd;
-    std::size_t m_ExpectedSize;
-    std::size_t m_BytesWritten;
-    bool        m_IsActive;
-    bool        m_IsComplete;
-    bool        m_AutoCleanup;
+    Logger         m_Logger;
+    std::string    m_TempFilePath;
+    int            m_TempFd;
+    std::size_t    m_ExpectedSize;
+    std::size_t    m_BytesWritten;
+    bool           m_IsActive;
+    bool           m_IsComplete;
+    bool           m_AutoCleanup;
+    std::string    m_Boundary;
+    MultipartState m_ParserState;
+    std::string    m_ParserBuffer;
 
     static std::string generateTempFilePath();
     bool               createTempFile();
