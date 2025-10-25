@@ -138,6 +138,75 @@ Monitor::ExecResult Monitor::handleLargeUpload(const int fdesc, const std::strin
     logger.info() << "Large upload started, received " << alreadyReceived << "/"
                   << uploadInfo.totalContentLength << " bytes initially";
 
+    // Continue reading available data immediately (non-blocking socket)
+    char buffer[UPLOAD_BUFFER_SIZE];
+    while (state->totalReceived < state->totalContentLength) {
+        ssize_t bytesRead = recv(fdesc, buffer, UPLOAD_BUFFER_SIZE, 0);
+        if (bytesRead <= 0) {
+            // No more data available now, will continue on next poll event
+            break;
+        }
+
+        std::size_t bytesToWrite = static_cast<std::size_t>(bytesRead);
+        if (state->totalReceived + bytesToWrite > state->totalContentLength) {
+            bytesToWrite = state->totalContentLength - state->totalReceived;
+        }
+
+        if (!uploadManager->writeChunk(buffer, bytesToWrite)) {
+            logger.error() << "Failed to write chunk during initial read";
+            uploadManager->cleanup();
+            removeUploadState(fdesc);
+            this->closePollFd(fdesc);
+            return Monitor::EXEC_SUCCESS;
+        }
+
+        state->totalReceived += bytesToWrite;
+    }
+
+    // Check if upload completed immediately
+    if (state->totalReceived >= state->totalContentLength) {
+        if (!uploadManager->finishUpload()) {
+            logger.error() << "Failed to finish large upload";
+            uploadManager->cleanup();
+            removeUploadState(fdesc);
+            this->closePollFd(fdesc);
+            return Monitor::EXEC_SUCCESS;
+        }
+
+        uploadManager->disableAutoCleanup();
+
+        std::string headersOnly =
+            state->rawRequest.substr(0, state->rawRequest.find("\r\n\r\n") + 4);
+        logger.info() << "Large upload completed successfully, temp file: "
+                      << uploadManager->getTempFilePath();
+
+        HttpRequest httpRequest(logger);
+        httpRequest.setTempFilePath(uploadManager->getTempFilePath());
+        httpRequest.parse(headersOnly);
+
+        HttpResponse httpResponse;
+        if (httpRequest.isValid()) {
+            int serverPort = this->getPortForConnection(fdesc);
+            if (serverPort < 0) {
+                if (!this->servers.empty() && !this->servers[0].listens.empty()) {
+                    serverPort = this->servers[0].listens[0].second;
+                } else {
+                    serverPort = DEFAULT_SERVER_PORT;
+                }
+            }
+            httpResponse = this->httpServer->processRequest(httpRequest, serverPort);
+        } else {
+            logger.warn() << "Invalid HTTP request received";
+            httpResponse = HttpResponse::createBadRequest();
+        }
+
+        std::string responseString = httpResponse.toString();
+        send(fdesc, responseString.c_str(), responseString.size(), 0);
+
+        removeUploadState(fdesc);
+        this->closePollFd(fdesc);
+    }
+
     ready--;
     return Monitor::EXEC_SUCCESS;
 }
