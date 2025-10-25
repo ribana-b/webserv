@@ -241,7 +241,7 @@ bool UploadManager::isLargeFile(std::size_t contentLength) {
 /* @------------------------------------------------------------------------@ */
 
 std::string UploadManager::generateTempFilePath() {
-    char tempTemplate[] = "/tmp/webserv_upload_XXXXXX";
+    char tempTemplate[] = "./html/.upload_XXXXXX.tmp";
     int  fd = mkstemp(tempTemplate);
     if (fd == -1) {
         return "";

@@ -197,6 +197,12 @@ bool Monitor::processContentLength(const std::string &rawRequest, std::size_t he
     }
 
     totalContentLength = stringToNumber(lengthStr);
+
+    // Don't try to read large files in memory - let streaming handle them
+    if (totalContentLength >= LARGE_FILE_THRESHOLD) {
+        return false;
+    }
+
     std::size_t bodyStart = headerEndPos + 4;
     std::size_t currentBodySize = rawRequest.length() - bodyStart;
 
