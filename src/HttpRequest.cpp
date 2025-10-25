@@ -231,7 +231,8 @@ bool HttpRequest::parseBody(const std::string& rawData, std::size_t headerEnd) {
 
     if (lowerTE.find("chunked") != std::string::npos) {
         // Handle chunked encoding
-        std::size_t bodyStart = headerEnd + 4;  // Skip \r\n\r\n
+        // headerEnd already points to position after \r\n\r\n (passed from parse())
+        std::size_t bodyStart = headerEnd;
         if (bodyStart >= rawData.length()) {
             m_Body = "";
             const_cast<Logger&>(m_Logger).info() << "parseBody: No body data after headers";

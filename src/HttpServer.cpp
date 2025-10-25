@@ -1232,7 +1232,7 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
     // PATH_INFO for CGI is the path AFTER the script filename
     // For /directory/youpi.bla -> PATH_INFO should be empty (no extra path)
     // For /directory/youpi.bla/extra/path -> PATH_INFO should be /extra/path
-    // Currently supporting direct script execution only, so PATH_INFO is empty
+    // Currently supporting direct script execution only
     std::string pathInfo = "";
 
     m_Logger.info() << "CGI PATH_INFO set to empty for direct script execution, path: '" << path
