@@ -11,9 +11,11 @@
 /* ************************************************************************** */
 
 #include <arpa/inet.h>  // For ntohs
+#include <errno.h>      // For errno
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <unistd.h>     // For close, unlink
 
 #include <cstddef>
 #include <cstring>  // For strerror
@@ -40,11 +42,14 @@ static std::size_t stringToNumber(const std::string &str) {
 }
 
 int Monitor::eventInit(int ready) {
-    for (int i = 0; ready > 0 && i <= this->maxFd; i++) {
-        if (this->isPollFd(i) == 0) {
+    // Iterate over the fds array, not over fd numbers
+    for (int i = 0; ready > 0 && i < this->fdCount; i++) {
+        // Check if this fd has any events
+        if (fds[i].revents == 0) {
             continue;
         }
-        if (this->eventExec(i, ready) < 0) {
+        // Process the event for this fd
+        if (this->eventExec(fds[i].fd, ready) < 0) {
             return -1;
         }
     }
@@ -91,21 +96,66 @@ Monitor::ExecResult Monitor::eventExecConnection(const int fdesc, int &ready) {
 }
 
 Monitor::ExecResult Monitor::eventExecRequest(const int fdesc, int &ready) {
+    // Get the index of this fd in the fds array to access revents
+    int fdIndex = getFdIndex(fdesc);
+    if (fdIndex == -1) {
+        logger.warn() << "eventExecRequest called with unknown fd " << fdesc;
+        return Monitor::EXEC_SUCCESS;
+    }
+
+    short revents = fds[fdIndex].revents;
+
+    // Log what events we received (for debugging)
+    if (revents & POLLHUP) {
+        logger.info() << "POLLHUP detected on fd " << fdesc << " - client disconnected";
+    }
+    if (revents & POLLERR) {
+        logger.error() << "POLLERR detected on fd " << fdesc;
+    }
+
+    // Check for disconnect/error - clean up and close
+    if ((revents & POLLHUP) || (revents & POLLERR)) {
+        // Clean up any pending state
+        removePendingResponse(fdesc);
+        removeUploadState(fdesc);
+        removeRequestBuffer(fdesc);
+        closePollFd(fdesc);
+        ready--;
+        return Monitor::EXEC_SUCCESS;
+    }
+
+    // Check if this file descriptor has a pending response to send
+    PendingResponse *pendingResponse = getPendingResponse(fdesc);
+    if (pendingResponse != NULL) {
+        // poll() returned - try to send (will get EAGAIN if not ready yet)
+        // This is compliant: we wait for poll() to return BEFORE calling send()
+        logger.info() << "poll() returned with pending response - attempting send for fd " << fdesc;
+        ready--;
+        return continueSend(fdesc);
+    }
+
     // Check if this file descriptor has an ongoing upload
     UploadState *uploadState = getUploadState(fdesc);
     if (uploadState != NULL) {
         return continueUpload(fdesc, ready);
     }
 
-    std::string rawRequest = readHttpRequest(fdesc);
+    // Normal request processing - only if POLLIN
+    if (revents & POLLIN) {
+        std::string rawRequest = readHttpRequest(fdesc);
 
-    // If request is incomplete (empty string returned), wait for more data
-    if (rawRequest.empty()) {
-        ready--;
-        return Monitor::EXEC_SUCCESS;
+        // If request is incomplete (empty string returned), wait for more data
+        if (rawRequest.empty()) {
+            ready--;
+            return Monitor::EXEC_SUCCESS;
+        }
+
+        return processHttpRequest(fdesc, rawRequest, ready);
     }
 
-    return processHttpRequest(fdesc, rawRequest, ready);
+    // No relevant events, just return
+    ready--;
+    return Monitor::EXEC_SUCCESS;
 }
 
 Monitor::ExecResult Monitor::handleLargeUpload(const int fdesc, const std::string &rawRequest,
@@ -249,11 +299,17 @@ Monitor::ExecResult Monitor::handleLargeUpload(const int fdesc, const std::strin
             httpResponse = HttpResponse::createBadRequest();
         }
 
-        std::string responseString = httpResponse.toString();
-        send(fdesc, responseString.c_str(), responseString.size(), 0);
+        sendHttpResponse(fdesc, httpResponse);
 
         removeUploadState(fdesc);
-        this->closePollFd(fdesc);
+
+        // Only close connection if response was fully sent
+        // If there's a pending response, keep connection open for POLLOUT handling
+        if (getPendingResponse(fdesc) == NULL) {
+            this->closePollFd(fdesc);
+        } else {
+            logger.info() << "Response pending on fd " << fdesc << ", keeping connection open for POLLOUT";
+        }
     }
 
     ready--;
@@ -340,7 +396,14 @@ std::string Monitor::readHttpRequest(int fdesc) {
         return fullRequest;
     }
 
-    // Headers complete, no Content-Length (GET, DELETE, HEAD, etc.)
+    // processContentLength returned false, which means one of:
+    // 1. No Content-Length header (GET/DELETE/HEAD) - OK to process immediately
+    // 2. Large file (>= LARGE_FILE_THRESHOLD) - handled separately by streaming
+    // 3. Small file - process with accumulated data (HttpRequest::parse handles partial body)
+
+    // For small files, just return what we have accumulated
+    // HttpRequest::parse() will handle incomplete body gracefully (warns but continues)
+    // The buffer accumulates data across multiple recv() calls via poll() events
     std::string completeRequest = reqBuffer->buffer;
     removeRequestBuffer(fdesc);
     return completeRequest;
@@ -380,29 +443,17 @@ bool Monitor::processContentLength(const std::string &rawRequest, std::size_t he
     }
 
     std::size_t bodyStart = headerEndPos + 4;
-    std::size_t currentBodySize = rawRequest.length() - bodyStart;
+    std::size_t currentBodySize = rawRequest.length() > bodyStart ? rawRequest.length() - bodyStart : 0;
 
+    // Check if we have the complete body in the current buffer
     if (currentBodySize < totalContentLength) {
-        char        buffer[BUFFER_SIZE + 1];
-        std::string completeRequest = rawRequest;
-
-        while (currentBodySize < totalContentLength) {
-            ssize_t moreBytesRead = recv(fdesc, buffer, BUFFER_SIZE, 0);
-            if (moreBytesRead <= 0) {
-                if (moreBytesRead == 0) {
-                    logger.warn() << "Connection closed while reading body";
-                } else {
-                    logger.warn() << "Error reading body data (subject forbids errno checking)";
-                }
-                break;
-            }
-            buffer[moreBytesRead] = '\0';
-            completeRequest += buffer;
-            currentBodySize = completeRequest.length() - bodyStart;
-        }
-        fullRequest = completeRequest;
+        // Body not complete yet - return false so readHttpRequest() waits for more data
+        (void)fdesc;  // Suppress unused parameter warning
+        return false;
     }
 
+    // Body is complete, return it
+    fullRequest = rawRequest;
     return true;
 }
 
@@ -502,7 +553,14 @@ Monitor::ExecResult Monitor::processHttpRequest(int fdesc, const std::string &ra
     sendHttpResponse(fdesc, httpResponse);
 
     ready--;
-    this->closePollFd(fdesc);
+
+    // Only close connection if response was fully sent
+    // If there's a pending response, keep connection open for POLLOUT handling
+    if (getPendingResponse(fdesc) == NULL) {
+        this->closePollFd(fdesc);
+    } else {
+        logger.info() << "Response pending on fd " << fdesc << ", keeping connection open for POLLOUT";
+    }
     return Monitor::EXEC_SUCCESS;
 }
 
@@ -602,12 +660,59 @@ HttpResponse Monitor::generateHttpResponse(const HttpRequest &httpRequest, int f
     logger.warn() << "Request marked as invalid by HttpRequest parser";
     logger.warn() << "Method: '" << httpRequest.getMethod() << "' Path: '" << httpRequest.getPath()
                   << "' Version: '" << httpRequest.getVersion() << "'";
+
+    // Return appropriate error response based on error code
+    int errorCode = httpRequest.getErrorCode();
+    if (errorCode == HTTP_URI_TOO_LONG) {
+        return HttpResponse(HTTP_URI_TOO_LONG, "URI Too Long");
+    } else if (errorCode == HTTP_HEADER_FIELDS_TOO_LARGE) {
+        return HttpResponse(HTTP_HEADER_FIELDS_TOO_LARGE, "Request Header Fields Too Large");
+    }
+
     return HttpResponse::createBadRequest();
 }
 
 void Monitor::sendHttpResponse(int fdesc, const HttpResponse &httpResponse) {
     std::string responseString = httpResponse.toString();
-    send(fdesc, responseString.c_str(), responseString.size(), 0);
+    size_t      totalSize = responseString.size();
+    size_t      totalSent = 0;
+
+    // Keep sending until we get EAGAIN (recommended pattern for non-blocking sockets)
+    while (totalSent < totalSize) {
+        size_t remaining = totalSize - totalSent;
+        ssize_t sent = send(fdesc, responseString.c_str() + totalSent, remaining, 0);
+
+        if (sent == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Socket buffer full - save remaining data and wait for POLLOUT
+                logger.info() << "Socket buffer full after sending " << totalSent << "/" << totalSize
+                              << " bytes, queueing remaining data";
+
+                // Save the remaining data
+                PendingResponse *pending = new PendingResponse(responseString);
+                pending->bytesSent = totalSent;
+                addPendingResponse(fdesc, pending);
+
+                // Add POLLOUT to events to be notified when socket is writable
+                for (int i = 0; i < fdCount; i++) {
+                    if (fds[i].fd == fdesc) {
+                        fds[i].events = POLLIN | POLLOUT;
+                        break;
+                    }
+                }
+                return;
+            } else {
+                // Real error
+                logger.error() << "Failed to send response: " << strerror(errno);
+                return;
+            }
+        }
+
+        totalSent += sent;
+    }
+
+    // Successfully sent complete response
+    logger.info() << "Successfully sent complete response (" << totalSent << " bytes)";
 }
 
 UploadState *Monitor::getUploadState(int fdesc) {
@@ -646,6 +751,74 @@ void Monitor::removeRequestBuffer(int fdesc) {
         delete it->second;
         requestBuffers.erase(it);
     }
+}
+
+PendingResponse *Monitor::getPendingResponse(int fdesc) {
+    std::map<int, PendingResponse *>::iterator it = pendingResponses.find(fdesc);
+    if (it != pendingResponses.end()) {
+        return it->second;
+    }
+    return NULL;
+}
+
+void Monitor::addPendingResponse(int fdesc, PendingResponse *response) {
+    pendingResponses[fdesc] = response;
+}
+
+void Monitor::removePendingResponse(int fdesc) {
+    std::map<int, PendingResponse *>::iterator it = pendingResponses.find(fdesc);
+    if (it != pendingResponses.end()) {
+        // Clean up file descriptor and temp file if using file-based response
+        if (it->second->tempFileFd >= 0) {
+            close(it->second->tempFileFd);
+            if (!it->second->tempFilePath.empty()) {
+                unlink(it->second->tempFilePath.c_str());
+                logger.info() << "Cleaned up response temp file: " << it->second->tempFilePath;
+            }
+        }
+        delete it->second;
+        pendingResponses.erase(it);
+    }
+}
+
+Monitor::ExecResult Monitor::continueSend(int fdesc) {
+    PendingResponse *pending = getPendingResponse(fdesc);
+    if (pending == NULL) {
+        logger.warn() << "continueSend called but no pending response for fd " << fdesc;
+        return Monitor::EXEC_SUCCESS;
+    }
+
+    // Keep sending until we get EAGAIN or complete
+    while (pending->bytesSent < pending->totalSize) {
+        size_t remaining = pending->totalSize - pending->bytesSent;
+        ssize_t sent = send(fdesc, pending->stringData.c_str() + pending->bytesSent, remaining, 0);
+
+        if (sent == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Socket buffer full again, keep POLLOUT and wait
+                logger.info() << "Socket buffer full at " << pending->bytesSent << "/" << pending->totalSize
+                              << " bytes, waiting for next POLLOUT";
+                return Monitor::EXEC_SUCCESS;
+            } else {
+                // Real error
+                logger.error() << "Failed to continue send: " << strerror(errno);
+                removePendingResponse(fdesc);
+                closePollFd(fdesc);
+                return Monitor::EXEC_CONNECTION_ERROR;
+            }
+        }
+
+        pending->bytesSent += sent;
+    }
+
+    // Complete send!
+    logger.info() << "Successfully sent complete response (" << pending->bytesSent << " bytes)";
+    removePendingResponse(fdesc);
+
+    // Close connection after sending response (HTTP/1.0 behavior)
+    closePollFd(fdesc);
+
+    return Monitor::EXEC_SUCCESS;
 }
 
 Monitor::ExecResult Monitor::continueUpload(int fdesc, int &ready) {
@@ -726,13 +899,18 @@ Monitor::ExecResult Monitor::continueUpload(int fdesc, int &ready) {
             httpResponse = HttpResponse::createBadRequest();
         }
 
-        std::string responseString = httpResponse.toString();
-        send(fdesc, responseString.c_str(), responseString.size(), 0);
+        sendHttpResponse(fdesc, httpResponse);
 
         ready--;
         uploadState->manager->cleanup();
         removeUploadState(fdesc);
-        this->closePollFd(fdesc);
+
+        // Only close connection if response was fully sent
+        if (getPendingResponse(fdesc) == NULL) {
+            this->closePollFd(fdesc);
+        } else {
+            logger.info() << "Response pending on fd " << fdesc << ", keeping connection open for POLLOUT";
+        }
     }
 
     return Monitor::EXEC_SUCCESS;

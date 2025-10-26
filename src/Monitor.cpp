@@ -72,11 +72,14 @@ void Monitor::beginLoop() {
     }
     while (true) {
         ready = poll(this->fds, this->fdCount, POLL_WAIT);
+
         if (ready < 0) {
             break;
         }
-        if (ready > 0 && this->eventInit(ready) < 0) {
-            break;
+        if (ready > 0) {
+            if (this->eventInit(ready) < 0) {
+                break;
+            }
         }
     }
     this->cleanPollFds();
@@ -107,6 +110,9 @@ void Monitor::closePollFd(const int fdesc) {
     // Clean up any request buffer for this file descriptor
     removeRequestBuffer(fdesc);
 
+    // Graceful shutdown: send FIN and drain send buffer before closing
+    // This prevents loss of data still in kernel send buffer
+    shutdown(fdesc, SHUT_WR);
     close(fdesc);
     while (itr < this->fdCount && fdesc != this->fds[itr].fd) {
         itr++;
@@ -138,6 +144,15 @@ int Monitor::isPollFd(const int fdesc) const {
         }
     }
     return 0;
+}
+
+int Monitor::getFdIndex(const int fdesc) const {
+    for (int i = 0; i < this->fdCount; i++) {
+        if (fdesc == this->fds[i].fd) {
+            return i;
+        }
+    }
+    return -1;  // Not found
 }
 
 int Monitor::isListenFd(const int fdesc) const {

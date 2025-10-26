@@ -20,6 +20,9 @@
 #define CONTENT_LENGTH_HEADER 15
 #define DEFAULT_SERVER_PORT   8080
 #define POLL_TIMEOUT_MS       5000
+#define MAX_URI_LENGTH        2048
+#define MAX_QUERY_STRING_LENGTH 4096
+#define MAX_HEADERS_SIZE      8192
 
 /* @------------------------------------------------------------------------@ */
 /* |                            Include Section                             | */
@@ -55,6 +58,26 @@ struct RequestBuffer {
     RequestBuffer() : buffer() {}
 };
 
+struct PendingResponse {
+    // For small responses (<1MB): use stringData
+    std::string stringData;
+
+    // For large responses (>=1MB): stream from file
+    int         tempFileFd;     // -1 if using stringData, >=0 if using file
+    std::string tempFilePath;   // Path to temp file (for cleanup)
+    std::size_t totalSize;      // Total response size
+
+    std::size_t bytesSent;      // How many bytes have been sent already
+
+    // Constructor for string-based responses (small)
+    PendingResponse(const std::string &responseData) :
+        stringData(responseData), tempFileFd(-1), totalSize(responseData.size()), bytesSent(0) {}
+
+    // Constructor for file-based responses (large)
+    PendingResponse(int fileFd, const std::string &filePath, std::size_t size) :
+        tempFileFd(fileFd), tempFilePath(filePath), totalSize(size), bytesSent(0) {}
+};
+
 /* @------------------------------------------------------------------------@ */
 /* |                             Class Section                              | */
 /* @------------------------------------------------------------------------@ */
@@ -76,6 +99,7 @@ private:
     int                          maxFd;
     std::map<int, UploadState *> activeUploads;
     std::map<int, RequestBuffer *> requestBuffers;  // Buffer incomplete HTTP requests
+    std::map<int, PendingResponse *> pendingResponses;  // Track partial response sends
 
     enum InitResult { INIT_SUCCESS, INIT_MEMORY_ERROR, INIT_LISTEN_ERROR };
 
@@ -86,6 +110,7 @@ private:
     void       closePollFd(int fdesc);
     void       cleanPollFds();
     int        isPollFd(int fdesc) const;
+    int        getFdIndex(int fdesc) const;
     int        isListenFd(int fdesc) const;
     int        getPortForFd(int fdesc) const;
     int        getPortForConnection(int fdesc) const;
@@ -127,7 +152,7 @@ private:
     static std::size_t extractContentLength(const std::string &rawRequest,
                                             std::size_t        contentLengthPos);
     HttpResponse       generateHttpResponse(const HttpRequest &httpRequest, int fdesc);
-    static void        sendHttpResponse(int fdesc, const HttpResponse &httpResponse);
+    void               sendHttpResponse(int fdesc, const HttpResponse &httpResponse);
 
     // Upload state management
     UploadState *getUploadState(int fdesc);
@@ -139,6 +164,12 @@ private:
     RequestBuffer *getRequestBuffer(int fdesc);
     void           addRequestBuffer(int fdesc, RequestBuffer *buffer);
     void           removeRequestBuffer(int fdesc);
+
+    // Pending response management
+    PendingResponse *getPendingResponse(int fdesc);
+    void             addPendingResponse(int fdesc, PendingResponse *response);
+    void             removePendingResponse(int fdesc);
+    ExecResult       continueSend(int fdesc);
 
 public:
     Monitor(const Logger &logger);

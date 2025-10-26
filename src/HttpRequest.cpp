@@ -17,6 +17,9 @@
 #include <sstream>   // For std::istringstream
 #include <string>    // For std::string, getline
 
+#include "HttpServer.hpp"  // For HTTP_* constants
+#include "Monitor.hpp"     // For MAX_URI_LENGTH, MAX_QUERY_STRING_LENGTH, MAX_HEADERS_SIZE
+
 static std::size_t stringToNumber(const std::string& str) {
     const std::size_t decimal = 10;
     std::size_t       result = 0;
@@ -35,10 +38,11 @@ static std::size_t stringToNumber(const std::string& str) {
 /* |                        Constructor/Destructor                          | */
 /* @------------------------------------------------------------------------@ */
 
-HttpRequest::HttpRequest() : m_Logger(std::cout, false), m_IsComplete(false), m_IsValid(false) {}
+HttpRequest::HttpRequest() :
+    m_Logger(std::cout, false), m_IsComplete(false), m_IsValid(false), m_ErrorCode(0) {}
 
 HttpRequest::HttpRequest(const Logger& logger) :
-    m_Logger(logger), m_IsComplete(false), m_IsValid(false) {}
+    m_Logger(logger), m_IsComplete(false), m_IsValid(false), m_ErrorCode(0) {}
 
 HttpRequest::~HttpRequest() {}
 
@@ -51,6 +55,7 @@ HttpRequest::HttpRequest(const HttpRequest& that) :
     m_Body(that.m_Body),
     m_IsComplete(that.m_IsComplete),
     m_IsValid(that.m_IsValid),
+    m_ErrorCode(that.m_ErrorCode),
     m_TempFilePath(that.m_TempFilePath) {}
 
 HttpRequest& HttpRequest::operator=(const HttpRequest& that) {
@@ -62,6 +67,7 @@ HttpRequest& HttpRequest::operator=(const HttpRequest& that) {
         m_Body = that.m_Body;
         m_IsComplete = that.m_IsComplete;
         m_IsValid = that.m_IsValid;
+        m_ErrorCode = that.m_ErrorCode;
         m_TempFilePath = that.m_TempFilePath;
     }
     return (*this);
@@ -76,6 +82,14 @@ bool HttpRequest::parse(const std::string& rawData) {
 
     std::size_t headerEnd = rawData.find("\r\n\r\n");
     if (headerEnd == std::string::npos) {
+        return false;
+    }
+
+    // Validate total headers size (prevent header flooding attacks)
+    if (headerEnd > MAX_HEADERS_SIZE) {
+        m_Logger.error() << "Headers too large: " << headerEnd << " bytes (max: "
+                         << MAX_HEADERS_SIZE << ")";
+        m_ErrorCode = HTTP_HEADER_FIELDS_TOO_LARGE;
         return false;
     }
 
@@ -121,6 +135,7 @@ void HttpRequest::clear() {
     m_Body.clear();
     m_IsComplete = false;
     m_IsValid = false;
+    m_ErrorCode = 0;
     // Don't clear m_TempFilePath as it may be set before parsing for large uploads
 }
 
@@ -150,6 +165,8 @@ std::size_t HttpRequest::getContentLength() const {
     return stringToNumber(contentLengthStr);
 }
 
+int HttpRequest::getErrorCode() const { return m_ErrorCode; }
+
 /* @------------------------------------------------------------------------@ */
 /* |                             Private Methods                            | */
 /* @------------------------------------------------------------------------@ */
@@ -173,6 +190,26 @@ bool HttpRequest::parseRequestLine(const std::string& line) {
     if (path.empty() || path[0] != '/') {
         m_Logger.error() << "Invalid path: " << path;
         return false;
+    }
+
+    // Validate URI length (RFC 2616 recommends at least 2048 bytes)
+    if (path.length() > MAX_URI_LENGTH) {
+        m_Logger.error() << "URI too long: " << path.length() << " bytes (max: "
+                         << MAX_URI_LENGTH << ")";
+        m_ErrorCode = HTTP_URI_TOO_LONG;
+        return false;
+    }
+
+    // Validate query string length (if present)
+    std::size_t queryPos = path.find('?');
+    if (queryPos != std::string::npos) {
+        std::size_t queryLength = path.length() - queryPos - 1;
+        if (queryLength > MAX_QUERY_STRING_LENGTH) {
+            m_Logger.error() << "Query string too long: " << queryLength << " bytes (max: "
+                             << MAX_QUERY_STRING_LENGTH << ")";
+            m_ErrorCode = HTTP_URI_TOO_LONG;
+            return false;
+        }
     }
 
     if (!isValidVersion(version)) {

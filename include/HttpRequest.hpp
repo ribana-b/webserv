@@ -46,6 +46,7 @@ public:
     const std::string& getHeader(const std::string& key) const;
     const std::string& getBody() const;
     std::size_t        getContentLength() const;
+    int                getErrorCode() const;
 
     // Large file upload support
     bool               hasLargeUpload() const;
@@ -62,6 +63,7 @@ private:
     std::string                        m_Body;
     bool                               m_IsComplete;
     bool                               m_IsValid;
+    int                                m_ErrorCode;  // HTTP error code if parsing failed
     std::string                        m_TempFilePath;
 
     bool               parseRequestLine(const std::string& line);
