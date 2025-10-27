@@ -13,8 +13,8 @@
 #ifndef MONITOR_HPP
 #define MONITOR_HPP
 
-#define POLLFD_SIZE           10
-#define LISTEN_BACKLOG        10
+#define POLLFD_SIZE           200
+#define LISTEN_BACKLOG        128
 #define POLL_WAIT             30000
 #define BUFFER_SIZE           5000
 #define CONTENT_LENGTH_HEADER 15
