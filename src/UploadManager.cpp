@@ -180,7 +180,8 @@ bool UploadManager::writeChunk(const char* data, std::size_t size) {
             // Keep buffer size manageable (boundary length + safety margin)
             std::size_t maxBufferSize = m_Boundary.length() + 10;
 
-            if (m_ParserBuffer.length() > maxBufferSize) {
+            // Write all excess bytes to file (must be WHILE, not IF!)
+            while (m_ParserBuffer.length() > maxBufferSize) {
                 // Write oldest byte to file
                 char byte = m_ParserBuffer[0];
                 if (write(m_TempFd, &byte, 1) != 1) {
