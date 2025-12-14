@@ -110,9 +110,7 @@ void Monitor::closePollFd(const int fdesc) {
     // Clean up any request buffer for this file descriptor
     removeRequestBuffer(fdesc);
 
-    // Graceful shutdown: send FIN and drain send buffer before closing
-    // This prevents loss of data still in kernel send buffer
-    shutdown(fdesc, SHUT_WR);
+    // Close connection (shutdown removed - not in allowed functions list)
     close(fdesc);
     while (itr < this->fdCount && fdesc != this->fds[itr].fd) {
         itr++;

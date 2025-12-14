@@ -147,8 +147,6 @@ private:
     bool               processContentLength(const std::string &rawRequest, std::size_t headerEndPos,
                                             std::size_t &totalContentLength, std::string &fullRequest, int fdesc);
     ExecResult         processHttpRequest(int fdesc, const std::string &rawRequest, int &ready);
-    ExecResult         streamRemainingData(int fdesc, UploadManager &uploadManager,
-                                           std::size_t &totalReceived, std::size_t totalContentLength);
     static std::size_t extractContentLength(const std::string &rawRequest,
                                             std::size_t        contentLengthPos);
     HttpResponse       generateHttpResponse(const HttpRequest &httpRequest, int fdesc);

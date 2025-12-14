@@ -52,6 +52,8 @@ public:
     bool               hasLargeUpload() const;
     const std::string& getTempFilePath() const;
     void               setTempFilePath(const std::string& tempPath);
+    const std::string& getOriginalFilename() const;
+    void               setOriginalFilename(const std::string& filename);
     std::string        readBodyFromTempFile() const;
 
 private:
@@ -65,6 +67,7 @@ private:
     bool                               m_IsValid;
     int                                m_ErrorCode;  // HTTP error code if parsing failed
     std::string                        m_TempFilePath;
+    std::string                        m_OriginalFilename;
 
     bool               parseRequestLine(const std::string& line);
     bool               parseHeaders(const std::string& headerSection);

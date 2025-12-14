@@ -157,24 +157,9 @@ HttpResponse HttpServer::handleGET(const HttpRequest& request, const Config::Ser
         cleanPath = cleanPath.substr(0, queryPos);
     }
 
-    // Remove location prefix from request path if applicable
-    std::string relativePath = cleanPath;
-    if (location != 0 && !location->path.empty() && location->path != "/") {
-        if (cleanPath.find(location->path) == 0) {
-            relativePath = cleanPath.substr(location->path.length());
-            if (relativePath.empty()) {
-                relativePath = "/";
-            }
-        }
-    }
-
-    // Construct file path
-    std::string filePath;
-    if (relativePath == "/") {
-        filePath = documentRoot + "/" + indexFile;
-    } else {
-        filePath = documentRoot + relativePath;
-    }
+    // Construct file path - nginx-style: root + full URL path
+    // e.g., root=./html, path=/upload/ -> ./html/upload/
+    std::string filePath = documentRoot + cleanPath;
 
     struct stat fileStat;
     if (stat(filePath.c_str(), &fileStat) != 0) {
@@ -331,7 +316,7 @@ std::string HttpServer::determinePOSTDocumentRoot(const Config::Location* locati
 // Helper method to process large file uploads
 bool HttpServer::processLargeFileUpload(const HttpRequest& request, const std::string& filename,
                                         std::size_t& fileSize) {
-    // Check if temp file exists before rename
+    // Check if temp file exists
     std::ifstream tempCheck(request.getTempFilePath().c_str());
     if (!tempCheck.good()) {
         m_Logger.error() << "Temp file does not exist or is not readable: "
@@ -340,20 +325,7 @@ bool HttpServer::processLargeFileUpload(const HttpRequest& request, const std::s
     }
     tempCheck.close();
 
-    int renameResult = rename(request.getTempFilePath().c_str(), filename.c_str());
-    if (renameResult == 0) {
-        // Get file size for reporting
-        std::ifstream file(filename.c_str(), std::ios::binary | std::ios::ate);
-        if (file.is_open()) {
-            fileSize = static_cast<std::size_t>(file.tellg());
-            file.close();
-        }
-        m_Logger.info() << "Large file moved successfully from " << request.getTempFilePath()
-                        << " to " << filename << " (" << fileSize << " bytes)";
-        return true;
-    }
-
-    // Subject forbids errno checking - try copy and delete as fallback
+    // Copy file using C++ streams (rename not in allowed functions)
     std::ifstream source(request.getTempFilePath().c_str(), std::ios::binary);
     if (source.is_open()) {
         std::ofstream dest(filename.c_str(), std::ios::binary);
@@ -386,18 +358,166 @@ bool HttpServer::processLargeFileUpload(const HttpRequest& request, const std::s
     return false;
 }
 
+// Helper function to extract file content from multipart/form-data body
+// Returns the actual file content without multipart headers/boundaries
+static std::string extractMultipartFileContent(const std::string& body, const std::string& boundary) {
+    if (boundary.empty() || body.empty()) {
+        return body;  // Not multipart, return as-is
+    }
+
+    // Multipart format:
+    // --boundary\r\n
+    // Content-Disposition: form-data; name="file"; filename="test.txt"\r\n
+    // Content-Type: text/plain\r\n
+    // \r\n
+    // [FILE CONTENT]
+    // \r\n--boundary--
+
+    std::string startBoundary = "--" + boundary;
+    std::string endBoundary = "\r\n--" + boundary;
+
+    // Find the start boundary
+    std::size_t boundaryStart = body.find(startBoundary);
+    if (boundaryStart == std::string::npos) {
+        return body;  // No boundary found, return as-is
+    }
+
+    // Find the end of headers (double CRLF after boundary line)
+    std::size_t headersEnd = body.find("\r\n\r\n", boundaryStart);
+    if (headersEnd == std::string::npos) {
+        return body;  // Malformed multipart
+    }
+    std::size_t contentStart = headersEnd + 4;  // Skip \r\n\r\n
+
+    // Find the end boundary
+    std::size_t contentEnd = body.find(endBoundary, contentStart);
+    if (contentEnd == std::string::npos) {
+        // Try alternative: content might go to end with just --boundary--
+        contentEnd = body.find("--" + boundary + "--", contentStart);
+        if (contentEnd == std::string::npos) {
+            // No end boundary, take everything after headers
+            return body.substr(contentStart);
+        }
+        // Remove potential \r\n before final boundary
+        if (contentEnd >= 2 && body.substr(contentEnd - 2, 2) == "\r\n") {
+            contentEnd -= 2;
+        }
+    }
+
+    if (contentEnd <= contentStart) {
+        return "";  // Empty file
+    }
+
+    return body.substr(contentStart, contentEnd - contentStart);
+}
+
+// Helper function to extract original filename from multipart body
+static std::string extractFilenameFromMultipart(const std::string& body, const std::string& boundary) {
+    if (boundary.empty() || body.empty()) {
+        return "";
+    }
+
+    // Find Content-Disposition header
+    std::size_t dispPos = body.find("Content-Disposition:");
+    if (dispPos == std::string::npos) {
+        dispPos = body.find("content-disposition:");
+    }
+    if (dispPos == std::string::npos) {
+        return "";
+    }
+
+    // Find filename="xxx" in the header
+    std::size_t filenamePos = body.find("filename=\"", dispPos);
+    if (filenamePos == std::string::npos) {
+        return "";
+    }
+
+    std::size_t start = filenamePos + 10;  // Length of 'filename="'
+    std::size_t end = body.find("\"", start);
+    if (end == std::string::npos || end <= start) {
+        return "";
+    }
+
+    std::string filename = body.substr(start, end - start);
+
+    // Security: remove any path components (keep only basename)
+    std::size_t lastSlash = filename.rfind('/');
+    if (lastSlash != std::string::npos) {
+        filename = filename.substr(lastSlash + 1);
+    }
+    lastSlash = filename.rfind('\\');
+    if (lastSlash != std::string::npos) {
+        filename = filename.substr(lastSlash + 1);
+    }
+
+    // Security: remove dangerous characters
+    std::string safe;
+    for (std::size_t i = 0; i < filename.length(); ++i) {
+        char c = filename[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-') {
+            safe += c;
+        }
+    }
+
+    return safe.empty() ? "" : safe;
+}
+
+// Helper function to extract boundary from Content-Type header
+static std::string extractBoundaryFromContentType(const std::string& contentType) {
+    std::size_t boundaryPos = contentType.find("boundary=");
+    if (boundaryPos == std::string::npos) {
+        return "";
+    }
+
+    std::size_t start = boundaryPos + 9;  // Length of "boundary="
+    std::size_t end = contentType.length();
+
+    // Handle quoted boundary
+    if (start < contentType.length() && contentType[start] == '"') {
+        start++;
+        end = contentType.find('"', start);
+        if (end == std::string::npos) {
+            end = contentType.length();
+        }
+    } else {
+        // Find end (semicolon, space, or end of string)
+        end = contentType.find_first_of("; \r\n", start);
+        if (end == std::string::npos) {
+            end = contentType.length();
+        }
+    }
+
+    return contentType.substr(start, end - start);
+}
+
 // Helper method to process regular file uploads
 bool HttpServer::processRegularFileUpload(const HttpRequest& request, const std::string& filename,
                                           std::size_t& fileSize) {
-    const std::string& body = request.getBody();
+    std::string body = request.getBody();
     if (body.empty()) {
         m_Logger.warn() << "Empty upload request body";
         return false;
     }
 
+    // Check if this is a multipart/form-data upload and extract actual file content
+    std::string contentType = request.getHeader("Content-Type");
+    if (contentType.find("multipart/form-data") != std::string::npos) {
+        std::string boundary = extractBoundaryFromContentType(contentType);
+        if (!boundary.empty()) {
+            m_Logger.info() << "Parsing multipart upload with boundary: " << boundary;
+            body = extractMultipartFileContent(body, boundary);
+            if (body.empty()) {
+                m_Logger.warn() << "Failed to extract file content from multipart body";
+                return false;
+            }
+            m_Logger.info() << "Extracted " << body.size() << " bytes of file content from multipart";
+        }
+    }
+
     std::ofstream outFile(filename.c_str(), std::ios::binary);
     if (outFile.is_open()) {
-        outFile << body;
+        outFile.write(body.c_str(), static_cast<std::streamsize>(body.size()));
         outFile.close();
         fileSize = body.length();
         m_Logger.info() << "Small file uploaded successfully: " << filename << " (" << fileSize
@@ -410,7 +530,8 @@ bool HttpServer::processRegularFileUpload(const HttpRequest& request, const std:
 // Helper method to handle file upload logic
 HttpResponse HttpServer::handleFileUpload(const HttpRequest& request, const Config::Server& server,
                                           const std::string& requestPath) {
-    if (requestPath != "/upload") {
+    // Accept any path starting with /upload (e.g., /upload, /upload_small, /upload_large)
+    if (requestPath.find("/upload") != 0) {
         // Default POST response for non-upload requests
         HttpResponse response(HTTP_OK, m_Logger);
         response.setHeader("Content-Type", "text/plain");
@@ -430,14 +551,38 @@ HttpResponse HttpServer::handleFileUpload(const HttpRequest& request, const Conf
     const Config::Location* location = findMatchingLocation(server, requestPath);
     std::string documentRoot = determinePOSTDocumentRoot(location, server);
 
-    // Generate final filename using documentRoot from config
+    // Try to extract original filename from multipart data
+    std::string originalFilename;
+    std::string contentType = request.getHeader("Content-Type");
+    if (contentType.find("multipart/form-data") != std::string::npos) {
+        if (isLargeUpload) {
+            // For large uploads, filename was extracted during streaming by UploadManager
+            originalFilename = request.getOriginalFilename();
+        } else {
+            // For small uploads, extract from body in memory
+            std::string boundary = extractBoundaryFromContentType(contentType);
+            if (!boundary.empty()) {
+                originalFilename = extractFilenameFromMultipart(request.getBody(), boundary);
+            }
+        }
+    }
+
+    // Generate final filename
     std::ostringstream  oss;
     static unsigned int uploadCounter = 0;
-    oss << documentRoot << "/upload/uploaded_" << ++uploadCounter;
-    if (isLargeUpload) {
-        oss << "_large.bin";  // Use binary extension for large files
+    ++uploadCounter;
+
+    if (!originalFilename.empty()) {
+        // Use original filename (already sanitized)
+        oss << documentRoot << "/upload/" << originalFilename;
     } else {
-        oss << ".txt";
+        // Fallback to generated name
+        oss << documentRoot << "/upload/uploaded_" << uploadCounter;
+        if (isLargeUpload) {
+            oss << ".bin";
+        } else {
+            oss << ".txt";
+        }
     }
     std::string filename = oss.str();
 
@@ -568,19 +713,8 @@ HttpResponse HttpServer::handleDELETE(const HttpRequest& request, const Config::
         documentRoot = "./html";
     }
 
-    // Remove location prefix from request path if applicable
-    std::string relativePath = requestPath;
-    if (location != 0 && !location->path.empty() && location->path != "/") {
-        if (requestPath.find(location->path) == 0) {
-            relativePath = requestPath.substr(location->path.length());
-            if (relativePath.empty()) {
-                relativePath = "/";
-            }
-        }
-    }
-
-    // Construct file path
-    std::string filePath = documentRoot + relativePath;
+    // Construct file path - nginx-style: root + full URL path
+    std::string filePath = documentRoot + requestPath;
 
     struct stat fileStat;
     if (stat(filePath.c_str(), &fileStat) != 0) {

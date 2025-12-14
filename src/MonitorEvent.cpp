@@ -277,6 +277,7 @@ Monitor::ExecResult Monitor::handleLargeUpload(const int fdesc, const std::strin
 
         HttpRequest httpRequest(logger);
         httpRequest.setTempFilePath(uploadManager->getTempFilePath());
+        httpRequest.setOriginalFilename(uploadManager->getOriginalFilename());
         httpRequest.parse(headersOnly);
 
         HttpResponse httpResponse;
@@ -329,9 +330,15 @@ std::string Monitor::readHttpRequest(int fdesc) {
 
     // SINGLE recv() call per poll() event - strict compliance with subject
     bytesRead = recv(fdesc, buffer, BUFFER_SIZE, 0);
-    if (bytesRead <= 0) {
-        // Connection closed or error
-        return reqBuffer->buffer;
+    if (bytesRead < 0) {
+        // No data available (EAGAIN/EWOULDBLOCK) - return empty to wait for next poll
+        return "";
+    }
+    if (bytesRead == 0) {
+        // Connection closed by client - return what we have (caller will handle incomplete data)
+        std::string result = reqBuffer->buffer;
+        removeRequestBuffer(fdesc);
+        return result;
     }
 
     buffer[bytesRead] = '\0';
@@ -399,11 +406,45 @@ std::string Monitor::readHttpRequest(int fdesc) {
     // processContentLength returned false, which means one of:
     // 1. No Content-Length header (GET/DELETE/HEAD) - OK to process immediately
     // 2. Large file (>= LARGE_FILE_THRESHOLD) - handled separately by streaming
-    // 3. Small file - process with accumulated data (HttpRequest::parse handles partial body)
+    // 3. Small file body incomplete - WAIT for more data
 
-    // For small files, just return what we have accumulated
-    // HttpRequest::parse() will handle incomplete body gracefully (warns but continues)
-    // The buffer accumulates data across multiple recv() calls via poll() events
+    // Check if there's a Content-Length header but body is incomplete
+    std::string headersSection = reqBuffer->buffer.substr(0, headerEndPos);
+    std::size_t contentLengthPos = headersSection.find("Content-Length:");
+
+    if (contentLengthPos != std::string::npos) {
+        // Has Content-Length - check if we have complete body
+        std::size_t valueStart = contentLengthPos + CONTENT_LENGTH_HEADER;
+        std::size_t lineEnd = headersSection.find("\r\n", valueStart);
+        if (lineEnd != std::string::npos) {
+            std::string lengthStr = headersSection.substr(valueStart, lineEnd - valueStart);
+            while (!lengthStr.empty() && lengthStr[0] == ' ')
+                lengthStr = lengthStr.substr(1);
+            while (!lengthStr.empty() && lengthStr[lengthStr.length() - 1] == ' ')
+                lengthStr = lengthStr.substr(0, lengthStr.length() - 1);
+
+            std::size_t contentLength = stringToNumber(lengthStr);
+
+            // If it's a large file, let streaming handle it
+            if (contentLength >= LARGE_FILE_THRESHOLD) {
+                std::string completeRequest = reqBuffer->buffer;
+                removeRequestBuffer(fdesc);
+                return completeRequest;
+            }
+
+            // For small files, check if body is complete
+            std::size_t bodyStart = headerEndPos + 4;
+            std::size_t currentBodySize =
+                reqBuffer->buffer.length() > bodyStart ? reqBuffer->buffer.length() - bodyStart : 0;
+
+            if (currentBodySize < contentLength) {
+                // Body not complete yet, wait for more data
+                return "";
+            }
+        }
+    }
+
+    // No Content-Length or body complete - return request
     std::string completeRequest = reqBuffer->buffer;
     removeRequestBuffer(fdesc);
     return completeRequest;
@@ -412,6 +453,7 @@ std::string Monitor::readHttpRequest(int fdesc) {
 bool Monitor::processContentLength(const std::string &rawRequest, std::size_t headerEndPos,
                                    std::size_t &totalContentLength, std::string &fullRequest,
                                    int fdesc) {
+    Logger      logger(std::cout, true);
     std::string headersSection = rawRequest.substr(0, headerEndPos);
     std::size_t contentLengthPos = headersSection.find("Content-Length:");
 
@@ -437,6 +479,101 @@ bool Monitor::processContentLength(const std::string &rawRequest, std::size_t he
 
     totalContentLength = stringToNumber(lengthStr);
 
+    // EARLY VALIDATION: Check client_max_body_size BEFORE accumulating more data
+    // This prevents memory exhaustion attacks with small files that exceed limits
+    // Extract request path from first line
+    std::size_t firstLineEnd = rawRequest.find("\r\n");
+    if (firstLineEnd != std::string::npos) {
+        std::string firstLine = rawRequest.substr(0, firstLineEnd);
+        // Parse "METHOD /path HTTP/1.x"
+        std::size_t pathStart = firstLine.find(' ');
+        if (pathStart != std::string::npos) {
+            pathStart++;
+            std::size_t pathEnd = firstLine.find(' ', pathStart);
+            if (pathEnd != std::string::npos) {
+                std::string requestPath = firstLine.substr(pathStart, pathEnd - pathStart);
+                // Remove query string if present
+                std::size_t queryPos = requestPath.find('?');
+                if (queryPos != std::string::npos) {
+                    requestPath = requestPath.substr(0, queryPos);
+                }
+
+                // Find server by connection port
+                int                   serverPort = this->getPortForConnection(fdesc);
+                const Config::Server *matchingServer = NULL;
+                for (std::size_t i = 0; i < this->servers.size(); ++i) {
+                    for (std::size_t j = 0; j < this->servers[i].listens.size(); ++j) {
+                        if (ntohs(this->servers[i].listens[j].second) == serverPort) {
+                            matchingServer = &this->servers[i];
+                            break;
+                        }
+                    }
+                    if (matchingServer)
+                        break;
+                }
+
+                // Find matching location
+                if (matchingServer != NULL) {
+                    const Config::Location *matchingLocation = NULL;
+                    std::size_t             bestMatchLength = 0;
+
+                    for (std::size_t i = 0; i < matchingServer->locations.size(); ++i) {
+                        const Config::Location &loc = matchingServer->locations[i];
+                        if (requestPath.find(loc.path) == 0) {
+                            bool isValidMatch = false;
+                            if (loc.path == "/") {
+                                isValidMatch = true;
+                            } else if (requestPath.length() == loc.path.length()) {
+                                isValidMatch = true;
+                            } else if (requestPath[loc.path.length()] == '/') {
+                                isValidMatch = true;
+                            }
+
+                            if (isValidMatch && loc.path.length() > bestMatchLength) {
+                                matchingLocation = &loc;
+                                bestMatchLength = loc.path.length();
+                            }
+                        }
+                    }
+
+                    // Check client_max_body_size limit
+                    if (matchingLocation != NULL && matchingLocation->clientMaxBodySize > 0 &&
+                        totalContentLength > matchingLocation->clientMaxBodySize) {
+                        logger.warn() << "Early rejection: Content-Length " << totalContentLength
+                                      << " exceeds client_max_body_size "
+                                      << matchingLocation->clientMaxBodySize << " for path " << requestPath;
+
+                        // Send 413 Payload Too Large immediately
+                        HttpResponse errorResponse(HTTP_PAYLOAD_TOO_LARGE, logger);
+                        errorResponse.setHeader("Content-Type", "text/html");
+                        errorResponse.setHeader("Connection", "close");
+                        errorResponse.setBody(
+                            "<html><head><title>413 Payload Too Large</title></head>"
+                            "<body><h1>413 Payload Too Large</h1>"
+                            "<p>The request body exceeds the maximum allowed size.</p></body></html>");
+
+                        std::string response = errorResponse.toString();
+                        send(fdesc, response.c_str(), response.length(), 0);
+
+                        // Set SO_LINGER to ensure the 413 response is sent before close
+                        struct linger ling;
+                        ling.l_onoff = 1;
+                        ling.l_linger = 1;
+                        setsockopt(fdesc, SOL_SOCKET, SO_LINGER, &ling, sizeof(ling));
+
+                        // Clean up and close connection
+                        removeRequestBuffer(fdesc);
+                        this->closePollFd(fdesc);
+
+                        // Return true to signal "handled" (caller won't process further)
+                        fullRequest = "";
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
     // Don't try to read large files in memory - let streaming handle them
     if (totalContentLength >= LARGE_FILE_THRESHOLD) {
         return false;
@@ -448,7 +585,6 @@ bool Monitor::processContentLength(const std::string &rawRequest, std::size_t he
     // Check if we have the complete body in the current buffer
     if (currentBodySize < totalContentLength) {
         // Body not complete yet - return false so readHttpRequest() waits for more data
-        (void)fdesc;  // Suppress unused parameter warning
         return false;
     }
 
@@ -564,63 +700,6 @@ Monitor::ExecResult Monitor::processHttpRequest(int fdesc, const std::string &ra
     return Monitor::EXEC_SUCCESS;
 }
 
-Monitor::ExecResult Monitor::streamRemainingData(int fdesc, UploadManager &uploadManager,
-                                                 std::size_t &totalReceived,
-                                                 std::size_t  totalContentLength) {
-    char      buffer[UPLOAD_BUFFER_SIZE];
-    Logger    logger(std::cout, true);
-    int       consecutiveFailures = 0;
-    const int maxConsecutiveFailures = 50000;  // Allow more retries for large uploads
-
-    while (totalReceived < totalContentLength && consecutiveFailures < maxConsecutiveFailures) {
-        ssize_t bytesRead = recv(fdesc, buffer, UPLOAD_BUFFER_SIZE, 0);
-        if (bytesRead <= 0) {
-            if (bytesRead == 0) {
-                logger.warn() << "Connection closed during large upload (received " << totalReceived
-                              << "/" << totalContentLength << " bytes)";
-                uploadManager.cleanup();
-                this->closePollFd(fdesc);
-                return Monitor::EXEC_SUCCESS;
-            }
-            // recv() returned -1, which could be EAGAIN/EWOULDBLOCK or real error
-            // Subject forbids checking errno after I/O operations
-            // For non-blocking sockets, this typically means no more data available now
-            // Increment consecutive failure count to prevent infinite loops
-            consecutiveFailures++;
-            continue;
-        }
-
-        // Reset consecutive failure count on successful read
-        consecutiveFailures = 0;
-
-        std::size_t bytesToWrite = static_cast<std::size_t>(bytesRead);
-        if (totalReceived + bytesToWrite > totalContentLength) {
-            bytesToWrite = totalContentLength - totalReceived;
-        }
-
-        if (!uploadManager.writeChunk(buffer, bytesToWrite)) {
-            logger.error() << "Failed to write chunk to disk during large upload";
-            uploadManager.cleanup();
-            this->closePollFd(fdesc);
-            return Monitor::EXEC_SUCCESS;
-        }
-
-        totalReceived += bytesToWrite;
-    }
-
-    // Check if upload completed successfully
-    if (totalReceived >= totalContentLength) {
-        return Monitor::EXEC_SUCCESS;
-    }
-
-    // Upload incomplete due to timeout or connection issues
-    logger.warn() << "Large upload incomplete: received " << totalReceived << "/"
-                  << totalContentLength << " bytes (consecutive failure limit reached)";
-    uploadManager.cleanup();
-    this->closePollFd(fdesc);
-    return Monitor::EXEC_SUCCESS;
-}
-
 std::size_t Monitor::extractContentLength(const std::string &rawRequest,
                                           std::size_t        contentLengthPos) {
     std::size_t valueStart = contentLengthPos + CONTENT_LENGTH_HEADER;
@@ -683,29 +762,24 @@ void Monitor::sendHttpResponse(int fdesc, const HttpResponse &httpResponse) {
         ssize_t sent = send(fdesc, responseString.c_str() + totalSent, remaining, 0);
 
         if (sent == -1) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // Socket buffer full - save remaining data and wait for POLLOUT
-                logger.info() << "Socket buffer full after sending " << totalSent << "/" << totalSize
-                              << " bytes, queueing remaining data";
+            // Socket buffer full or error - queue remaining data and wait for POLLOUT
+            // Note: errno check forbidden by subject after I/O operations
+            logger.info() << "Send returned -1 after " << totalSent << "/" << totalSize
+                          << " bytes, queueing remaining data";
 
-                // Save the remaining data
-                PendingResponse *pending = new PendingResponse(responseString);
-                pending->bytesSent = totalSent;
-                addPendingResponse(fdesc, pending);
+            // Save the remaining data
+            PendingResponse *pending = new PendingResponse(responseString);
+            pending->bytesSent = totalSent;
+            addPendingResponse(fdesc, pending);
 
-                // Add POLLOUT to events to be notified when socket is writable
-                for (int i = 0; i < fdCount; i++) {
-                    if (fds[i].fd == fdesc) {
-                        fds[i].events = POLLIN | POLLOUT;
-                        break;
-                    }
+            // Add POLLOUT to events to be notified when socket is writable
+            for (int i = 0; i < fdCount; i++) {
+                if (fds[i].fd == fdesc) {
+                    fds[i].events = POLLIN | POLLOUT;
+                    break;
                 }
-                return;
-            } else {
-                // Real error
-                logger.error() << "Failed to send response: " << strerror(errno);
-                return;
             }
+            return;
         }
 
         totalSent += sent;
@@ -794,18 +868,11 @@ Monitor::ExecResult Monitor::continueSend(int fdesc) {
         ssize_t sent = send(fdesc, pending->stringData.c_str() + pending->bytesSent, remaining, 0);
 
         if (sent == -1) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // Socket buffer full again, keep POLLOUT and wait
-                logger.info() << "Socket buffer full at " << pending->bytesSent << "/" << pending->totalSize
-                              << " bytes, waiting for next POLLOUT";
-                return Monitor::EXEC_SUCCESS;
-            } else {
-                // Real error
-                logger.error() << "Failed to continue send: " << strerror(errno);
-                removePendingResponse(fdesc);
-                closePollFd(fdesc);
-                return Monitor::EXEC_CONNECTION_ERROR;
-            }
+            // Socket buffer full or error - wait for next POLLOUT
+            // Note: errno check forbidden by subject after I/O operations
+            logger.info() << "Send returned -1 at " << pending->bytesSent << "/" << pending->totalSize
+                          << " bytes, waiting for next POLLOUT";
+            return Monitor::EXEC_SUCCESS;
         }
 
         pending->bytesSent += sent;
@@ -877,6 +944,7 @@ Monitor::ExecResult Monitor::continueUpload(int fdesc, int &ready) {
 
         HttpRequest httpRequest(logger);
         httpRequest.setTempFilePath(uploadState->manager->getTempFilePath());
+        httpRequest.setOriginalFilename(uploadState->manager->getOriginalFilename());
         httpRequest.parse(headersOnly);
 
         HttpResponse httpResponse;

@@ -361,6 +361,10 @@ const std::string& HttpRequest::getTempFilePath() const { return m_TempFilePath;
 
 void HttpRequest::setTempFilePath(const std::string& tempPath) { m_TempFilePath = tempPath; }
 
+const std::string& HttpRequest::getOriginalFilename() const { return m_OriginalFilename; }
+
+void HttpRequest::setOriginalFilename(const std::string& filename) { m_OriginalFilename = filename; }
+
 std::string HttpRequest::readBodyFromTempFile() const {
     if (m_TempFilePath.empty()) {
         const_cast<Logger&>(m_Logger).warn()

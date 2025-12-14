@@ -16,7 +16,6 @@
 #include <sys/stat.h>  // For file permissions
 #include <unistd.h>    // For write, close, unlink
 
-#include <cstdlib>   // For mkstemp
 #include <cstring>   // For strlen
 #include <fstream>   // For std::ifstream
 #include <iostream>  // For std::cout
@@ -146,6 +145,31 @@ bool UploadManager::writeChunk(const char* data, std::size_t size) {
             if (m_ParserBuffer.length() >= 4) {
                 std::size_t headerEnd = m_ParserBuffer.find("\r\n\r\n");
                 if (headerEnd != std::string::npos) {
+                    // Extract filename from multipart headers before clearing
+                    std::size_t filenamePos = m_ParserBuffer.find("filename=\"");
+                    if (filenamePos != std::string::npos && filenamePos < headerEnd) {
+                        std::size_t start = filenamePos + 10;
+                        std::size_t end = m_ParserBuffer.find("\"", start);
+                        if (end != std::string::npos && end <= headerEnd) {
+                            std::string filename = m_ParserBuffer.substr(start, end - start);
+                            // Security: keep only basename
+                            std::size_t lastSlash = filename.rfind('/');
+                            if (lastSlash != std::string::npos) filename = filename.substr(lastSlash + 1);
+                            lastSlash = filename.rfind('\\');
+                            if (lastSlash != std::string::npos) filename = filename.substr(lastSlash + 1);
+                            // Security: sanitize characters
+                            std::string safe;
+                            for (std::size_t j = 0; j < filename.length(); ++j) {
+                                char c = filename[j];
+                                if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                                    (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-') {
+                                    safe += c;
+                                }
+                            }
+                            m_OriginalFilename = safe;
+                            m_Logger.info() << "UploadManager: Extracted filename: " << m_OriginalFilename;
+                        }
+                    }
                     m_ParserState = READING_FILE_DATA;
                     m_ParserBuffer.clear();
                     m_Logger.info() << "UploadManager: Found end of multipart headers, starting file data";
@@ -167,7 +191,18 @@ bool UploadManager::writeChunk(const char* data, std::size_t size) {
             }
 
             // Check if buffer contains boundary
-            if (m_ParserBuffer.find(m_Boundary) != std::string::npos) {
+            std::size_t boundaryPos = m_ParserBuffer.find(m_Boundary);
+            if (boundaryPos != std::string::npos) {
+                // Write any file data that comes BEFORE the boundary
+                // m_Boundary starts with \r\n, so boundaryPos points to the \r\n before --boundary
+                if (boundaryPos > 0) {
+                    if (write(m_TempFd, m_ParserBuffer.c_str(), boundaryPos) !=
+                        static_cast<ssize_t>(boundaryPos)) {
+                        m_Logger.error() << "UploadManager: Failed to write final bytes to temp file";
+                        return false;
+                    }
+                    m_BytesWritten += boundaryPos;
+                }
                 m_ParserState = DETECTED_BOUNDARY;
                 m_IsComplete = true;
                 closeTempFile();
@@ -242,6 +277,8 @@ std::size_t UploadManager::getBytesWritten() const { return m_BytesWritten; }
 
 std::size_t UploadManager::getExpectedSize() const { return m_ExpectedSize; }
 
+const std::string& UploadManager::getOriginalFilename() const { return m_OriginalFilename; }
+
 /* @------------------------------------------------------------------------@ */
 /* |                            Utility Methods                             | */
 /* @------------------------------------------------------------------------@ */
@@ -275,12 +312,41 @@ bool UploadManager::moveTempFile(const std::string& destination) {
         return false;
     }
 
-    // Use system rename for atomic move operation
-    if (rename(m_TempFilePath.c_str(), destination.c_str()) != 0) {
-        m_Logger.error() << "UploadManager: Failed to move " << m_TempFilePath << " to "
+    // Copy file using read/write (rename not in allowed functions)
+    int srcFd = open(m_TempFilePath.c_str(), O_RDONLY);
+    if (srcFd < 0) {
+        m_Logger.error() << "UploadManager: Failed to open source file: " << m_TempFilePath;
+        return false;
+    }
+
+    int dstFd = open(destination.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (dstFd < 0) {
+        close(srcFd);
+        m_Logger.error() << "UploadManager: Failed to open destination file: " << destination;
+        return false;
+    }
+
+    char buffer[8192];
+    ssize_t bytesRead;
+    bool success = true;
+    while ((bytesRead = read(srcFd, buffer, sizeof(buffer))) > 0) {
+        if (write(dstFd, buffer, bytesRead) != bytesRead) {
+            success = false;
+            break;
+        }
+    }
+
+    close(srcFd);
+    close(dstFd);
+
+    if (!success || bytesRead < 0) {
+        m_Logger.error() << "UploadManager: Failed to copy " << m_TempFilePath << " to "
                          << destination;
         return false;
     }
+
+    // Delete original temp file
+    unlink(m_TempFilePath.c_str());
 
     m_Logger.info() << "UploadManager: Moved temp file " << m_TempFilePath << " to " << destination;
 
@@ -299,15 +365,30 @@ bool UploadManager::isLargeFile(std::size_t contentLength) {
 /* @------------------------------------------------------------------------@ */
 
 std::string UploadManager::generateTempFilePath() {
-    char tempTemplate[] = "./html/.upload_XXXXXX";
-    int  fd = mkstemp(tempTemplate);
+    // Generate unique filename without mkstemp (not in allowed functions)
+    static unsigned int counter = 0;
+    std::ostringstream oss;
+    oss << "/tmp/.webserv_upload_" << ++counter;
+    std::string tempPath = oss.str();
+
+    // Try to create file with O_EXCL to ensure uniqueness
+    int fd = open(tempPath.c_str(), O_WRONLY | O_CREAT | O_EXCL, TEMP_FILE_PERMISSIONS);
     if (fd == -1) {
-        return "";
+        // If file exists, try with different counter values
+        for (int attempt = 0; attempt < 100 && fd == -1; ++attempt) {
+            oss.str("");
+            oss << "/tmp/.webserv_upload_" << ++counter;
+            tempPath = oss.str();
+            fd = open(tempPath.c_str(), O_WRONLY | O_CREAT | O_EXCL, TEMP_FILE_PERMISSIONS);
+        }
+        if (fd == -1) {
+            return "";
+        }
     }
 
     // Close the fd immediately, we'll reopen it properly
     close(fd);
-    return std::string(tempTemplate);
+    return tempPath;
 }
 
 bool UploadManager::createTempFile() {

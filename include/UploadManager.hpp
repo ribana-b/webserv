@@ -26,7 +26,7 @@
 /* |                            Define Section                              | */
 /* @------------------------------------------------------------------------@ */
 
-#define LARGE_FILE_THRESHOLD  1048576  // 1MB
+#define LARGE_FILE_THRESHOLD  8192  // 8KB - use streaming for anything that won't fit in buffer
 #define UPLOAD_BUFFER_SIZE    8192     // 8KB buffer for streaming
 #define TEMP_FILE_PERMISSIONS 0600     // rw------- permissions
 
@@ -61,6 +61,7 @@ public:
     bool               isLargeUpload() const;
     bool               isComplete() const;
     const std::string& getTempFilePath() const;
+    const std::string& getOriginalFilename() const;
     std::size_t        getBytesWritten() const;
     std::size_t        getExpectedSize() const;
 
@@ -75,6 +76,7 @@ public:
 private:
     Logger         m_Logger;
     std::string    m_TempFilePath;
+    std::string    m_OriginalFilename;
     int            m_TempFd;
     std::size_t    m_ExpectedSize;
     std::size_t    m_BytesWritten;
