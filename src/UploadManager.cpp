@@ -14,8 +14,9 @@
 
 #include <fcntl.h>     // For open, O_CREAT, etc
 #include <sys/stat.h>  // For file permissions
-#include <unistd.h>    // For write, close, unlink
+#include <unistd.h>    // For write, close
 
+#include <cstdio>    // For std::remove
 #include <cstring>   // For strlen
 #include <fstream>   // For std::ifstream
 #include <iostream>  // For std::cout
@@ -346,7 +347,7 @@ bool UploadManager::moveTempFile(const std::string& destination) {
     }
 
     // Delete original temp file
-    unlink(m_TempFilePath.c_str());
+    std::remove(m_TempFilePath.c_str());
 
     m_Logger.info() << "UploadManager: Moved temp file " << m_TempFilePath << " to " << destination;
 
@@ -418,7 +419,7 @@ void UploadManager::closeTempFile() {
 
 void UploadManager::deleteTempFile() {
     if (!m_TempFilePath.empty()) {
-        if (unlink(m_TempFilePath.c_str()) == 0) {
+        if (std::remove(m_TempFilePath.c_str()) == 0) {
         } else {
             m_Logger.warn() << "UploadManager: Failed to delete temp file: " << m_TempFilePath;
         }

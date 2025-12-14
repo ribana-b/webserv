@@ -15,9 +15,10 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/socket.h>
-#include <unistd.h>     // For close, unlink
+#include <unistd.h>     // For close
 
 #include <cstddef>
+#include <cstdio>   // For std::remove
 #include <cstring>  // For strerror
 #include <iostream>
 #include <string>
@@ -846,7 +847,7 @@ void Monitor::removePendingResponse(int fdesc) {
         if (it->second->tempFileFd >= 0) {
             close(it->second->tempFileFd);
             if (!it->second->tempFilePath.empty()) {
-                unlink(it->second->tempFilePath.c_str());
+                std::remove(it->second->tempFilePath.c_str());
                 logger.info() << "Cleaned up response temp file: " << it->second->tempFilePath;
             }
         }

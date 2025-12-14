@@ -18,9 +18,10 @@
 #include <netinet/in.h>  // For ntohs
 #include <sys/stat.h>    // For stat
 #include <sys/wait.h>    // For waitpid
-#include <unistd.h>      // For access, unlink, fork, exec, pipe
+#include <unistd.h>      // For access, fork, exec, pipe
 
 #include <algorithm>  // For std::sort
+#include <cstdio>     // For std::remove
 #include <cerrno>     // For errno
 #include <cstring>    // For strerror
 #include <fstream>    // For std::ofstream
@@ -341,7 +342,7 @@ bool HttpServer::processLargeFileUpload(const HttpRequest& request, const std::s
                 verify.close();
 
                 // Delete original temp file
-                unlink(request.getTempFilePath().c_str());
+                std::remove(request.getTempFilePath().c_str());
                 m_Logger.info() << "Large file copied successfully from "
                                 << request.getTempFilePath() << " to " << filename << " ("
                                 << fileSize << " bytes)";
@@ -722,7 +723,7 @@ HttpResponse HttpServer::handleDELETE(const HttpRequest& request, const Config::
     }
 
     if (S_ISREG(fileStat.st_mode)) {
-        if (unlink(filePath.c_str()) == 0) {
+        if (std::remove(filePath.c_str()) == 0) {
             m_Logger.info() << "File deleted successfully: " << filePath;
 
             HttpResponse response(HTTP_OK, m_Logger);
@@ -1429,7 +1430,7 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
 
                 if (written != static_cast<ssize_t>(requestBody.length())) {
                     m_Logger.error() << "Failed to write body to temp file";
-                    unlink(tempFilePath.c_str());
+                    std::remove(tempFilePath.c_str());
                     return createErrorResponse(HTTP_INTERNAL_ERROR, server);
                 }
 
@@ -1616,7 +1617,7 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
 
         // Cleanup temp file if we created one on-the-fly (for chunked large bodies)
         if (!tempFilePath.empty() && tempFilePath.find(".cgi_temp_") != std::string::npos) {
-            if (unlink(tempFilePath.c_str()) == 0) {
+            if (std::remove(tempFilePath.c_str()) == 0) {
                 m_Logger.info() << "Cleaned up CGI temp file: " << tempFilePath;
             } else {
                 m_Logger.warn() << "Failed to cleanup CGI temp file: " << tempFilePath;
@@ -1638,14 +1639,14 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
                 std::ifstream file(cgiOutputFile.c_str(), std::ios::binary);
                 if (!file.good()) {
                     m_Logger.error() << "Failed to read CGI output file: " << cgiOutputFile;
-                    unlink(cgiOutputFile.c_str());
+                    std::remove(cgiOutputFile.c_str());
                     return createErrorResponse(HTTP_INTERNAL_ERROR, server);
                 }
                 std::ostringstream buffer;
                 buffer << file.rdbuf();
                 fullOutput = buffer.str();
                 file.close();
-                unlink(cgiOutputFile.c_str());
+                std::remove(cgiOutputFile.c_str());
                 m_Logger.info() << "Read and cleaned up CGI output temp file: " << cgiOutputFile;
             } else {
                 fullOutput = cgiOutput;
@@ -1712,7 +1713,7 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
         // CGI execution failed
         // Clean up output temp file if created
         if (!cgiOutputFile.empty()) {
-            unlink(cgiOutputFile.c_str());
+            std::remove(cgiOutputFile.c_str());
         }
         m_Logger.error() << "CGI execution failed with status: " << WEXITSTATUS(status);
         return createErrorResponse(HTTP_INTERNAL_ERROR, server);
