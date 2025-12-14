@@ -157,9 +157,20 @@ HttpResponse HttpServer::handleGET(const HttpRequest& request, const Config::Ser
         cleanPath = cleanPath.substr(0, queryPos);
     }
 
-    // Construct file path - nginx-style: root + full URL path
-    // e.g., root=./html, path=/upload/ -> ./html/upload/
-    std::string filePath = documentRoot + cleanPath;
+    // Remove location prefix from request path if applicable
+    // e.g., location=/directory, root=./YoupiBanane, path=/directory/file.txt
+    // -> relativePath=/file.txt -> filePath=./YoupiBanane/file.txt
+    std::string relativePath = cleanPath;
+    if (location != 0 && !location->path.empty() && location->path != "/") {
+        if (cleanPath.find(location->path) == 0) {
+            relativePath = cleanPath.substr(location->path.length());
+            if (relativePath.empty()) {
+                relativePath = "/";
+            }
+        }
+    }
+
+    std::string filePath = documentRoot + relativePath;
 
     struct stat fileStat;
     if (stat(filePath.c_str(), &fileStat) != 0) {
@@ -749,8 +760,19 @@ HttpResponse HttpServer::handleDELETE(const HttpRequest& request, const Config::
         documentRoot = "./html";
     }
 
-    // Construct file path - nginx-style: root + full URL path
-    std::string filePath = documentRoot + requestPath;
+    // Remove location prefix from request path if applicable
+    std::string relativePath = requestPath;
+    if (location != 0 && !location->path.empty() && location->path != "/") {
+        if (requestPath.find(location->path) == 0) {
+            relativePath = requestPath.substr(location->path.length());
+            if (relativePath.empty()) {
+                relativePath = "/";
+            }
+        }
+    }
+
+    // Construct file path
+    std::string filePath = documentRoot + relativePath;
 
     // Security: Check if path is a symlink (reject if so)
     // If file exists (stat succeeds) but open with O_NOFOLLOW fails, it's a symlink
@@ -858,7 +880,8 @@ HttpResponse HttpServer::validateHEADRequest(const HttpRequest& /* request */,
     }
 
     // Check if method is allowed for this location
-    if ((location != 0) && !isMethodAllowed("HEAD", *location)) {
+    // HEAD is implicitly allowed when GET is allowed (HEAD = GET without body)
+    if ((location != 0) && !isMethodAllowed("HEAD", *location) && !isMethodAllowed("GET", *location)) {
         m_Logger.warn() << "HEAD method not allowed for path: " << requestPath;
         return createErrorResponse(HTTP_METHOD_NOT_ALLOWED, server);
     }
