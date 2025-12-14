@@ -39,11 +39,11 @@ def run_tests():
     print("=" * 70)
     print(f"{Colors.END}")
     
-    base_url = "http://localhost:8080"
+    base_url = "http://localhost:8082"
     
     # Start server
     print(f"{Colors.BLUE}Starting webserv server...{Colors.END}")
-    server = subprocess.Popen(["./webserv", "location_test.conf"])
+    server = subprocess.Popen(["./webserv", "config/testing/upload_test.conf"])
     time.sleep(3)
     
     if server.poll() is not None:
@@ -196,8 +196,8 @@ if __name__ == "__main__":
         print(f"{Colors.RED}Error: ./webserv not found. Run 'make' first.{Colors.END}")
         sys.exit(1)
         
-    if not os.path.exists("location_test.conf"):
-        print(f"{Colors.RED}Error: location_test.conf not found.{Colors.END}")
+    if not os.path.exists("config/testing/upload_test.conf"):
+        print(f"{Colors.RED}Error: config/testing/upload_test.conf not found.{Colors.END}")
         sys.exit(1)
         
     run_tests()

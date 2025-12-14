@@ -196,8 +196,8 @@ HttpResponse HttpResponse::createNotFound(const std::string& message) {
 
     std::string body =
         message.empty()
-            ? "<!DOCTYPE html><html><head><title>HTTP_NOT_FOUND Not Found</title></head>"
-              "<body><h1>HTTP_NOT_FOUND Not Found</h1><p>The requested resource was not "
+            ? "<!DOCTYPE html><html><head><title>404 Not Found</title></head>"
+              "<body><h1>404 Not Found</h1><p>The requested resource was not "
               "found.</p></body></html>"
             : message;
 
@@ -209,9 +209,9 @@ HttpResponse HttpResponse::createInternalError(const std::string& message) {
     HttpResponse response(HTTP_INTERNAL_ERROR);
     response.setHeader("Content-Type", "text/html; charset=utf-8");
 
-    std::string body = message.empty() ? "<!DOCTYPE html><html><head><title>HTTP_INTERNAL_ERROR "
+    std::string body = message.empty() ? "<!DOCTYPE html><html><head><title>500 "
                                          "Internal Server Error</title></head>"
-                                         "<body><h1>HTTP_INTERNAL_ERROR Internal Server "
+                                         "<body><h1>500 Internal Server "
                                          "Error</h1><p>The server encountered an "
                                          "error.</p></body></html>"
                                        : message;
@@ -226,9 +226,23 @@ HttpResponse HttpResponse::createBadRequest(const std::string& message) {
 
     std::string body =
         message.empty()
-            ? "<!DOCTYPE html><html><head><title>HTTP_BAD_REQUEST Bad Request</title></head>"
-              "<body><h1>HTTP_BAD_REQUEST Bad Request</h1><p>The request was "
+            ? "<!DOCTYPE html><html><head><title>400 Bad Request</title></head>"
+              "<body><h1>400 Bad Request</h1><p>The request was "
               "malformed.</p></body></html>"
+            : message;
+
+    response.setBody(body);
+    return response;
+}
+
+HttpResponse HttpResponse::createForbidden(const std::string& message) {
+    HttpResponse response(HTTP_FORBIDDEN);
+    response.setHeader("Content-Type", "text/html; charset=utf-8");
+
+    std::string body =
+        message.empty()
+            ? "<!DOCTYPE html><html><head><title>403 Forbidden</title></head>"
+              "<body><h1>403 Forbidden</h1><p>Access to this resource is forbidden.</p></body></html>"
             : message;
 
     response.setBody(body);
@@ -240,9 +254,9 @@ HttpResponse HttpResponse::createMethodNotAllowed(const std::string& message) {
     response.setHeader("Content-Type", "text/html; charset=utf-8");
 
     std::string body = message.empty()
-                           ? "<!DOCTYPE html><html><head><title>HTTP_METHOD_NOT_ALLOWED Method Not "
+                           ? "<!DOCTYPE html><html><head><title>405 Method Not "
                              "Allowed</title></head>"
-                             "<body><h1>HTTP_METHOD_NOT_ALLOWED Method Not Allowed</h1><p>The "
+                             "<body><h1>405 Method Not Allowed</h1><p>The "
                              "requested method is not "
                              "allowed.</p></body></html>"
                            : message;

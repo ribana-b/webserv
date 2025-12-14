@@ -5,3 +5,8 @@ webserv
 compile_commands.json
 *.log
 .CLAUDE.md
+
+# Test upload files (temporary files, large binaries)
+html/.upload_*
+html/upload/*.bin
+html/uploads/*.bin

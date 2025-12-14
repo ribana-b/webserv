@@ -29,6 +29,7 @@
 #define HTTP_METHOD_NOT_ALLOWED    405
 #define HTTP_PAYLOAD_TOO_LARGE     413
 #define HTTP_URI_TOO_LONG          414
+#define HTTP_HEADER_FIELDS_TOO_LARGE 431
 #define HTTP_INTERNAL_ERROR        500
 #define HTTP_NOT_IMPLEMENTED       501
 #define HTTP_VERSION_NOT_SUPPORTED 505
@@ -90,6 +91,7 @@ private:
 
     HttpResponse handleGET(const HttpRequest& request, const Config::Server& server);
     HttpResponse handlePOST(const HttpRequest& request, const Config::Server& server);
+    HttpResponse handlePUT(const HttpRequest& request, const Config::Server& server);
     HttpResponse handleDELETE(const HttpRequest& request, const Config::Server& server);
     HttpResponse handleHEAD(const HttpRequest& request, const Config::Server& server);
     HttpResponse handleCGI(const HttpRequest& request, const Config::Server& server,

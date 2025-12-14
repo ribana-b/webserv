@@ -72,11 +72,14 @@ void Monitor::beginLoop() {
     }
     while (true) {
         ready = poll(this->fds, this->fdCount, POLL_WAIT);
+
         if (ready < 0) {
             break;
         }
-        if (ready > 0 && this->eventInit(ready) < 0) {
-            break;
+        if (ready > 0) {
+            if (this->eventInit(ready) < 0) {
+                break;
+            }
         }
     }
     this->cleanPollFds();
@@ -104,6 +107,10 @@ void Monitor::closePollFd(const int fdesc) {
     // Clean up any upload state for this file descriptor
     removeUploadState(fdesc);
 
+    // Clean up any request buffer for this file descriptor
+    removeRequestBuffer(fdesc);
+
+    // Close connection (shutdown removed - not in allowed functions list)
     close(fdesc);
     while (itr < this->fdCount && fdesc != this->fds[itr].fd) {
         itr++;
@@ -118,6 +125,9 @@ void Monitor::closePollFd(const int fdesc) {
 
 void Monitor::cleanPollFds() {
     for (int i = 0; i < this->fdCount; i++) {
+        // Clean up request buffers before closing
+        removeRequestBuffer(this->fds[i].fd);
+        removeUploadState(this->fds[i].fd);
         close(this->fds[i].fd);
         this->fds[i].fd = -1;
     }
@@ -132,6 +142,15 @@ int Monitor::isPollFd(const int fdesc) const {
         }
     }
     return 0;
+}
+
+int Monitor::getFdIndex(const int fdesc) const {
+    for (int i = 0; i < this->fdCount; i++) {
+        if (fdesc == this->fds[i].fd) {
+            return i;
+        }
+    }
+    return -1;  // Not found
 }
 
 int Monitor::isListenFd(const int fdesc) const {

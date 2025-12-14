@@ -46,11 +46,14 @@ public:
     const std::string& getHeader(const std::string& key) const;
     const std::string& getBody() const;
     std::size_t        getContentLength() const;
+    int                getErrorCode() const;
 
     // Large file upload support
     bool               hasLargeUpload() const;
     const std::string& getTempFilePath() const;
     void               setTempFilePath(const std::string& tempPath);
+    const std::string& getOriginalFilename() const;
+    void               setOriginalFilename(const std::string& filename);
     std::string        readBodyFromTempFile() const;
 
 private:
@@ -62,7 +65,9 @@ private:
     std::string                        m_Body;
     bool                               m_IsComplete;
     bool                               m_IsValid;
+    int                                m_ErrorCode;  // HTTP error code if parsing failed
     std::string                        m_TempFilePath;
+    std::string                        m_OriginalFilename;
 
     bool               parseRequestLine(const std::string& line);
     bool               parseHeaders(const std::string& headerSection);
@@ -71,6 +76,10 @@ private:
     static std::string trimWhitespace(const std::string& str);
     static bool        isValidMethod(const std::string& method);
     static bool        isValidVersion(const std::string& version);
+
+    // Chunked encoding support
+    std::string        decodeChunkedBody(const std::string& chunkedData);
+    static std::size_t hexToSize(const std::string& hex);
 };
 
 /* @------------------------------------------------------------------------@ */

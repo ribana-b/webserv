@@ -42,6 +42,7 @@ static std::size_t stringToNumber(const std::string& str) {
 
 #define DECIMAL 10
 
+#define KILOBYTE (int)(1024)
 #define MEGABYTE (int)(1024 * 1024)
 #define BYTE     256
 
@@ -147,7 +148,10 @@ std::size_t Config::parseClientMaxBodySize(const std::string& value) {
     }
 
     std::size_t size = stringToNumber(value);
-    if (!value.empty() && (value[value.length() - 1] == 'm' || value[value.length() - 1] == 'M')) {
+    char lastChar = value[value.length() - 1];
+    if (lastChar == 'k' || lastChar == 'K') {
+        size *= KILOBYTE;
+    } else if (lastChar == 'm' || lastChar == 'M') {
         size *= MEGABYTE;
     }
 

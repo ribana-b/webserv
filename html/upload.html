@@ -6,9 +6,9 @@
         body { font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }
         .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
         h1 { color: #333; text-align: center; }
-        .upload-form { margin: 30px 0; padding: 20px; border: 2px dashed #ddd; border-radius: 8px; }
+        .upload-form { margin: 20px 0; padding: 20px; border: 2px dashed #007cba; border-radius: 8px; }
         input[type="file"] { margin: 10px 0; }
-        button { background: #007cba; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
+        button { background: #007cba; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; }
         button:hover { background: #005a8b; }
         .files-list { margin-top: 30px; }
         .file-item { padding: 10px; margin: 5px 0; background: #f8f9fa; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }
@@ -16,109 +16,157 @@
         .delete-btn:hover { background: #c82333; }
         .success { color: #28a745; font-weight: bold; }
         .error { color: #dc3545; font-weight: bold; }
+        .info-box { background: #e9ecef; padding: 15px; border-radius: 8px; margin: 20px 0; }
+        .progress-bar { width: 100%; height: 20px; background: #e9ecef; border-radius: 4px; overflow: hidden; margin: 10px 0; display: none; }
+        .progress-bar .progress { height: 100%; background: #007cba; transition: width 0.3s; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🦔 WebServ File Upload</h1>
-        <p>Upload files to the server and manage them with HTTP methods (GET, POST, DELETE).</p>
-        
+        <h1>WebServ File Upload</h1>
+
+        <div class="info-box">
+            <p><strong>Limite:</strong> 10MB por archivo</p>
+        </div>
+
         <div class="upload-form">
-            <h3>📤 Upload File</h3>
-            <form id="uploadForm" action="/upload" method="POST" enctype="multipart/form-data">
+            <h3>Subir Archivo</h3>
+            <form id="uploadForm">
                 <input type="file" id="fileInput" name="file" required>
                 <br>
-                <button type="submit">Upload File</button>
+                <button type="submit">Subir Archivo</button>
+                <span id="fileSize"></span>
             </form>
+            <div class="progress-bar" id="progressBar">
+                <div class="progress" id="progress"></div>
+            </div>
             <div id="uploadStatus"></div>
         </div>
-        
+
         <div class="files-list">
-            <h3>📁 Current Files</h3>
+            <h3>Archivos subidos</h3>
             <div id="filesList">
-                <p>Loading files...</p>
+                <p>Cargando archivos...</p>
             </div>
-            <button onclick="refreshFiles()">🔄 Refresh</button>
-        </div>
-        
-        <div style="margin-top: 30px; padding: 20px; background: #e9ecef; border-radius: 8px;">
-            <h4>🧪 Test HTTP Methods</h4>
-            <p><strong>GET:</strong> <a href="/">Browse files</a> | <a href="/subdir/">View subdirectory</a></p>
-            <p><strong>POST:</strong> Use the upload form above</p>
-            <p><strong>DELETE:</strong> Click the red delete buttons next to files</p>
+            <button onclick="refreshFiles()">Refrescar</button>
         </div>
     </div>
 
     <script>
-        // Simple JavaScript for file management
-        function refreshFiles() {
-            document.getElementById('filesList').innerHTML = '<p>Refreshing...</p>';
-            // Simulate file listing - in a real implementation this would fetch from server
-            setTimeout(() => {
-                document.getElementById('filesList').innerHTML = `
-                    <div class="file-item">
-                        <span>📄 index.html (61 bytes)</span>
-                        <button class="delete-btn" onclick="deleteFile('/index.html')">Delete</button>
-                    </div>
-                    <div class="file-item">
-                        <span>📄 test.txt (24 bytes)</span>
-                        <button class="delete-btn" onclick="deleteFile('/test.txt')">Delete</button>
-                    </div>
-                    <div class="file-item">
-                        <span>📄 upload.html (this file)</span>
-                        <button class="delete-btn" onclick="deleteFile('/upload.html')">Delete</button>
-                    </div>
-                `;
-            }, 500);
-        }
-        
-        function deleteFile(filePath) {
-            if (confirm('Are you sure you want to delete ' + filePath + '?')) {
-                fetch(filePath, { method: 'DELETE' })
-                    .then(response => response.text())
-                    .then(data => {
-                        alert('File deleted successfully!');
-                        refreshFiles();
-                    })
-                    .catch(error => {
-                        alert('Error deleting file: ' + error);
-                    });
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const sizeKB = (file.size / 1024).toFixed(2);
+                const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+                document.getElementById('fileSize').textContent =
+                    file.size > 1024*1024 ? `(${sizeMB} MB)` : `(${sizeKB} KB)`;
             }
-        }
-        
-        // Load files on page load
-        refreshFiles();
-        
-        // Handle upload form
+        });
+
         document.getElementById('uploadForm').addEventListener('submit', function(e) {
             e.preventDefault();
             const fileInput = document.getElementById('fileInput');
             const file = fileInput.files[0];
-            
+
             if (!file) {
-                alert('Please select a file');
+                alert('Selecciona un archivo');
                 return;
             }
-            
-            document.getElementById('uploadStatus').innerHTML = '<p>Uploading...</p>';
-            
+
+            const statusDiv = document.getElementById('uploadStatus');
+            statusDiv.innerHTML = '<p>Subiendo...</p>';
+            document.getElementById('progressBar').style.display = 'block';
+            document.getElementById('progress').style.width = '0%';
+
             const formData = new FormData();
             formData.append('file', file);
-            
-            fetch('/upload', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.text())
-            .then(data => {
-                document.getElementById('uploadStatus').innerHTML = '<p class="success">Upload successful!</p>';
-                fileInput.value = '';
-                refreshFiles();
-            })
-            .catch(error => {
-                document.getElementById('uploadStatus').innerHTML = '<p class="error">Upload failed: ' + error + '</p>';
+
+            const xhr = new XMLHttpRequest();
+
+            xhr.upload.addEventListener('progress', function(e) {
+                if (e.lengthComputable) {
+                    const percent = (e.loaded / e.total) * 100;
+                    document.getElementById('progress').style.width = percent + '%';
+                }
             });
+
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4) {
+                    document.getElementById('progressBar').style.display = 'none';
+
+                    if (xhr.status === 200 || xhr.status === 201) {
+                        statusDiv.innerHTML = '<p class="success">Upload exitoso!</p>';
+                        refreshFiles();
+                    } else if (xhr.status === 413) {
+                        statusDiv.innerHTML = '<p class="error">Error: Archivo demasiado grande (max 10MB)</p>';
+                    } else if (xhr.status === 0) {
+                        statusDiv.innerHTML = '<p class="error">Error: Archivo demasiado grande o conexion perdida</p>';
+                    } else {
+                        statusDiv.innerHTML = '<p class="error">Error ' + xhr.status + ': ' + xhr.statusText + '</p>';
+                    }
+                }
+            };
+
+            xhr.open('POST', '/upload', true);
+            xhr.send(formData);
         });
+
+        function refreshFiles() {
+            document.getElementById('filesList').innerHTML = '<p>Cargando...</p>';
+
+            fetch('/upload/')
+                .then(response => response.text())
+                .then(html => {
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+                    const links = doc.querySelectorAll('a.file');
+
+                    if (links.length === 0) {
+                        document.getElementById('filesList').innerHTML = '<p>No hay archivos</p>';
+                        return;
+                    }
+
+                    let filesHtml = '';
+                    links.forEach(link => {
+                        const fullText = link.textContent;
+                        const sizeSpan = link.querySelector('.size');
+                        const fileName = sizeSpan ? fullText.replace(sizeSpan.textContent, '').trim() : fullText.trim();
+                        const filePath = link.getAttribute('href');
+                        const size = sizeSpan ? sizeSpan.textContent : '';
+
+                        filesHtml += `
+                            <div class="file-item">
+                                <span>${fileName} ${size}</span>
+                                <button class="delete-btn" onclick="deleteFile('${filePath}')">Eliminar</button>
+                            </div>
+                        `;
+                    });
+
+                    document.getElementById('filesList').innerHTML = filesHtml;
+                })
+                .catch(error => {
+                    document.getElementById('filesList').innerHTML = '<p class="error">Error: ' + error + '</p>';
+                });
+        }
+
+        function deleteFile(filePath) {
+            if (confirm('Eliminar ' + filePath + '?')) {
+                fetch(filePath, { method: 'DELETE' })
+                    .then(response => {
+                        if (response.ok) {
+                            alert('Archivo eliminado');
+                            refreshFiles();
+                        } else {
+                            alert('Error al eliminar: ' + response.status);
+                        }
+                    })
+                    .catch(error => {
+                        alert('Error: ' + error);
+                    });
+            }
+        }
+
+        refreshFiles();
     </script>
 </body>
 </html>

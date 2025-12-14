@@ -11,20 +11,26 @@
 /* ************************************************************************** */
 
 #include "HttpServer.hpp"
+#include "UploadManager.hpp"  // For LARGE_FILE_THRESHOLD
 
 #include <dirent.h>      // For directory operations
+#include <fcntl.h>       // For open, O_NOFOLLOW
 #include <netinet/in.h>  // For ntohs
 #include <sys/stat.h>    // For stat
 #include <sys/wait.h>    // For waitpid
-#include <unistd.h>      // For access, unlink, fork, exec, pipe
+#include <unistd.h>      // For access, fork, exec, pipe
 
 #include <algorithm>  // For std::sort
+#include <cstdio>     // For std::remove
 #include <cstring>    // For strerror
 #include <fstream>    // For std::ofstream
 #include <iostream>   // For std::cout
 #include <set>        // For std::set
 #include <sstream>    // For std::ostringstream
 #include <vector>     // For std::vector
+
+// POSIX environ variable for passing environment to execve()
+extern char **environ;
 
 /* @------------------------------------------------------------------------@ */
 /* |                        Constructor/Destructor                          | */
@@ -80,6 +86,9 @@ HttpResponse HttpServer::processRequest(const HttpRequest& request, int serverPo
     }
     if (method == "POST") {
         return handlePOST(request, *server);
+    }
+    if (method == "PUT") {
+        return handlePUT(request, *server);
     }
     if (method == "DELETE") {
         return handleDELETE(request, *server);
@@ -148,18 +157,18 @@ HttpResponse HttpServer::handleGET(const HttpRequest& request, const Config::Ser
         cleanPath = cleanPath.substr(0, queryPos);
     }
 
-    // Construct file path
-    std::string filePath;
-    if (cleanPath == "/") {
-        filePath = documentRoot + "/" + indexFile;
-    } else {
-        filePath = documentRoot + cleanPath;
-    }
+    // Construct file path - nginx-style: root + full URL path
+    // e.g., root=./html, path=/upload/ -> ./html/upload/
+    std::string filePath = documentRoot + cleanPath;
 
     struct stat fileStat;
     if (stat(filePath.c_str(), &fileStat) != 0) {
         return createErrorResponse(HTTP_NOT_FOUND, server);
     }
+
+    m_Logger.info() << "GET " << requestPath << " -> filePath=" << filePath
+                    << " isDir=" << (S_ISDIR(fileStat.st_mode) ? "YES" : "NO");
+    std::cout.flush();
 
     if (S_ISREG(fileStat.st_mode)) {
         // Check if it's a CGI file
@@ -169,7 +178,44 @@ HttpResponse HttpServer::handleGET(const HttpRequest& request, const Config::Ser
         return serveStaticFile(filePath, server);
     }
     if (S_ISDIR(fileStat.st_mode)) {
-        return generateDirectoryListing(filePath, requestPath, server);
+        // Try to serve index file if configured
+        if (!indexFile.empty()) {
+            std::string indexPath = filePath;
+            if (indexPath[indexPath.length() - 1] != '/') {
+                indexPath += "/";
+            }
+            indexPath += indexFile;
+
+            struct stat indexStat;
+            if (stat(indexPath.c_str(), &indexStat) == 0 && S_ISREG(indexStat.st_mode)) {
+                // Index file exists - serve it
+                if (isCGIFile(indexPath)) {
+                    return handleCGI(request, server, indexPath);
+                }
+                return serveStaticFile(indexPath, server);
+            }
+        }
+
+        // Index file doesn't exist
+        m_Logger.info() << "Directory without index file. requestPath='" << requestPath
+                        << "' last_char='" << (requestPath.length() > 0 ? requestPath[requestPath.length() - 1] : '?') << "'";
+        std::cout.flush();
+
+        // If URL doesn't end with '/', return 404 (cannot serve directory without index and without explicit trailing slash)
+        if (requestPath.length() > 0 && requestPath[requestPath.length() - 1] != '/') {
+            m_Logger.warn() << "Directory requested without trailing slash and no index file: " << requestPath;
+            std::cout.flush();
+            return createErrorResponse(HTTP_NOT_FOUND, server);
+        }
+
+        // URL ends with '/' - check if autoindex is enabled
+        if (location != 0 && location->autoindex) {
+            return generateDirectoryListing(filePath, requestPath, server);
+        }
+
+        // autoindex is off - return 403 Forbidden
+        m_Logger.warn() << "Directory listing disabled for: " << requestPath;
+        return createErrorResponse(HTTP_FORBIDDEN, server);
     }
     return createErrorResponse(HTTP_FORBIDDEN, server);
 }
@@ -183,13 +229,8 @@ HttpResponse HttpServer::handlePOST(const HttpRequest& request, const Config::Se
     // Find matching location for this request
     const Config::Location* location = findMatchingLocation(server, requestPath);
 
-    // Validate POST request parameters
-    HttpResponse validationResponse = validatePOSTRequest(request, server, location, requestPath);
-    if (validationResponse.getStatusCode() != HTTP_OK) {
-        return validationResponse;
-    }
-
-    // Check if this is a CGI script request
+    // Check if this is a CGI script request FIRST (before method validation)
+    // CGI files have their own method requirements
     std::string cleanPath = requestPath;
     size_t      queryPos = cleanPath.find('?');
     if (queryPos != std::string::npos) {
@@ -198,14 +239,36 @@ HttpResponse HttpServer::handlePOST(const HttpRequest& request, const Config::Se
 
     // Determine document root and construct file path for CGI check
     std::string documentRoot = determinePOSTDocumentRoot(location, server);
-    std::string filePath = documentRoot + cleanPath;
 
-    // If it's a CGI file, handle it as CGI instead of upload
+    // Remove location prefix from request path if applicable
+    std::string relativePath = cleanPath;
+    if (location != 0 && !location->path.empty() && location->path != "/") {
+        if (cleanPath.find(location->path) == 0) {
+            relativePath = cleanPath.substr(location->path.length());
+            if (relativePath.empty()) {
+                relativePath = "/";
+            }
+        }
+    }
+
+    std::string filePath = documentRoot + relativePath;
+
+    // If it's a CGI file, handle it as CGI (bypass method validation)
     if (isCGIFile(filePath)) {
         struct stat fileStat;
         if (stat(filePath.c_str(), &fileStat) == 0 && S_ISREG(fileStat.st_mode)) {
             return handleCGI(request, server, filePath);
         }
+        // CGI file requested but doesn't exist -> 404
+        // (File existence takes precedence over method restrictions)
+        m_Logger.warn() << "CGI file not found: " << filePath;
+        return createErrorResponse(HTTP_NOT_FOUND, server);
+    }
+
+    // Not a CGI file - validate POST request parameters (including method check)
+    HttpResponse validationResponse = validatePOSTRequest(request, server, location, requestPath);
+    if (validationResponse.getStatusCode() != HTTP_OK) {
+        return validationResponse;
     }
 
     // Handle file upload or regular POST processing
@@ -253,7 +316,7 @@ std::string HttpServer::determinePOSTDocumentRoot(const Config::Location* locati
 // Helper method to process large file uploads
 bool HttpServer::processLargeFileUpload(const HttpRequest& request, const std::string& filename,
                                         std::size_t& fileSize) {
-    // Check if temp file exists before rename
+    // Check if temp file exists
     std::ifstream tempCheck(request.getTempFilePath().c_str());
     if (!tempCheck.good()) {
         m_Logger.error() << "Temp file does not exist or is not readable: "
@@ -262,20 +325,19 @@ bool HttpServer::processLargeFileUpload(const HttpRequest& request, const std::s
     }
     tempCheck.close();
 
-    int renameResult = rename(request.getTempFilePath().c_str(), filename.c_str());
-    if (renameResult == 0) {
-        // Get file size for reporting
-        std::ifstream file(filename.c_str(), std::ios::binary | std::ios::ate);
-        if (file.is_open()) {
-            fileSize = static_cast<std::size_t>(file.tellg());
-            file.close();
+    // Security: Check if destination is a symlink (reject if so)
+    // If file exists (stat succeeds) but open with O_NOFOLLOW fails, it's a symlink
+    struct stat symlinkCheck;
+    if (stat(filename.c_str(), &symlinkCheck) == 0) {
+        int testFd = open(filename.c_str(), O_RDONLY | O_NOFOLLOW);
+        if (testFd == -1) {
+            m_Logger.warn() << "Symlink rejected in large upload for security: " << filename;
+            return false;
         }
-        m_Logger.info() << "Large file moved successfully from " << request.getTempFilePath()
-                        << " to " << filename << " (" << fileSize << " bytes)";
-        return true;
+        close(testFd);
     }
 
-    // Subject forbids errno checking - try copy and delete as fallback
+    // Copy file using C++ streams (rename not in allowed functions)
     std::ifstream source(request.getTempFilePath().c_str(), std::ios::binary);
     if (source.is_open()) {
         std::ofstream dest(filename.c_str(), std::ios::binary);
@@ -291,7 +353,7 @@ bool HttpServer::processLargeFileUpload(const HttpRequest& request, const std::s
                 verify.close();
 
                 // Delete original temp file
-                unlink(request.getTempFilePath().c_str());
+                std::remove(request.getTempFilePath().c_str());
                 m_Logger.info() << "Large file copied successfully from "
                                 << request.getTempFilePath() << " to " << filename << " ("
                                 << fileSize << " bytes)";
@@ -308,18 +370,178 @@ bool HttpServer::processLargeFileUpload(const HttpRequest& request, const std::s
     return false;
 }
 
+// Helper function to extract file content from multipart/form-data body
+// Returns the actual file content without multipart headers/boundaries
+static std::string extractMultipartFileContent(const std::string& body, const std::string& boundary) {
+    if (boundary.empty() || body.empty()) {
+        return body;  // Not multipart, return as-is
+    }
+
+    // Multipart format:
+    // --boundary\r\n
+    // Content-Disposition: form-data; name="file"; filename="test.txt"\r\n
+    // Content-Type: text/plain\r\n
+    // \r\n
+    // [FILE CONTENT]
+    // \r\n--boundary--
+
+    std::string startBoundary = "--" + boundary;
+    std::string endBoundary = "\r\n--" + boundary;
+
+    // Find the start boundary
+    std::size_t boundaryStart = body.find(startBoundary);
+    if (boundaryStart == std::string::npos) {
+        return body;  // No boundary found, return as-is
+    }
+
+    // Find the end of headers (double CRLF after boundary line)
+    std::size_t headersEnd = body.find("\r\n\r\n", boundaryStart);
+    if (headersEnd == std::string::npos) {
+        return body;  // Malformed multipart
+    }
+    std::size_t contentStart = headersEnd + 4;  // Skip \r\n\r\n
+
+    // Find the end boundary
+    std::size_t contentEnd = body.find(endBoundary, contentStart);
+    if (contentEnd == std::string::npos) {
+        // Try alternative: content might go to end with just --boundary--
+        contentEnd = body.find("--" + boundary + "--", contentStart);
+        if (contentEnd == std::string::npos) {
+            // No end boundary, take everything after headers
+            return body.substr(contentStart);
+        }
+        // Remove potential \r\n before final boundary
+        if (contentEnd >= 2 && body.substr(contentEnd - 2, 2) == "\r\n") {
+            contentEnd -= 2;
+        }
+    }
+
+    if (contentEnd <= contentStart) {
+        return "";  // Empty file
+    }
+
+    return body.substr(contentStart, contentEnd - contentStart);
+}
+
+// Helper function to extract original filename from multipart body
+static std::string extractFilenameFromMultipart(const std::string& body, const std::string& boundary) {
+    if (boundary.empty() || body.empty()) {
+        return "";
+    }
+
+    // Find Content-Disposition header
+    std::size_t dispPos = body.find("Content-Disposition:");
+    if (dispPos == std::string::npos) {
+        dispPos = body.find("content-disposition:");
+    }
+    if (dispPos == std::string::npos) {
+        return "";
+    }
+
+    // Find filename="xxx" in the header
+    std::size_t filenamePos = body.find("filename=\"", dispPos);
+    if (filenamePos == std::string::npos) {
+        return "";
+    }
+
+    std::size_t start = filenamePos + 10;  // Length of 'filename="'
+    std::size_t end = body.find("\"", start);
+    if (end == std::string::npos || end <= start) {
+        return "";
+    }
+
+    std::string filename = body.substr(start, end - start);
+
+    // Security: remove any path components (keep only basename)
+    std::size_t lastSlash = filename.rfind('/');
+    if (lastSlash != std::string::npos) {
+        filename = filename.substr(lastSlash + 1);
+    }
+    lastSlash = filename.rfind('\\');
+    if (lastSlash != std::string::npos) {
+        filename = filename.substr(lastSlash + 1);
+    }
+
+    // Security: remove dangerous characters
+    std::string safe;
+    for (std::size_t i = 0; i < filename.length(); ++i) {
+        char c = filename[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-') {
+            safe += c;
+        }
+    }
+
+    return safe.empty() ? "" : safe;
+}
+
+// Helper function to extract boundary from Content-Type header
+static std::string extractBoundaryFromContentType(const std::string& contentType) {
+    std::size_t boundaryPos = contentType.find("boundary=");
+    if (boundaryPos == std::string::npos) {
+        return "";
+    }
+
+    std::size_t start = boundaryPos + 9;  // Length of "boundary="
+    std::size_t end = contentType.length();
+
+    // Handle quoted boundary
+    if (start < contentType.length() && contentType[start] == '"') {
+        start++;
+        end = contentType.find('"', start);
+        if (end == std::string::npos) {
+            end = contentType.length();
+        }
+    } else {
+        // Find end (semicolon, space, or end of string)
+        end = contentType.find_first_of("; \r\n", start);
+        if (end == std::string::npos) {
+            end = contentType.length();
+        }
+    }
+
+    return contentType.substr(start, end - start);
+}
+
 // Helper method to process regular file uploads
 bool HttpServer::processRegularFileUpload(const HttpRequest& request, const std::string& filename,
                                           std::size_t& fileSize) {
-    const std::string& body = request.getBody();
+    std::string body = request.getBody();
     if (body.empty()) {
         m_Logger.warn() << "Empty upload request body";
         return false;
     }
 
+    // Check if this is a multipart/form-data upload and extract actual file content
+    std::string contentType = request.getHeader("Content-Type");
+    if (contentType.find("multipart/form-data") != std::string::npos) {
+        std::string boundary = extractBoundaryFromContentType(contentType);
+        if (!boundary.empty()) {
+            m_Logger.info() << "Parsing multipart upload with boundary: " << boundary;
+            body = extractMultipartFileContent(body, boundary);
+            if (body.empty()) {
+                m_Logger.warn() << "Failed to extract file content from multipart body";
+                return false;
+            }
+            m_Logger.info() << "Extracted " << body.size() << " bytes of file content from multipart";
+        }
+    }
+
+    // Security: Check if destination is a symlink (reject if so)
+    // If file exists (stat succeeds) but open with O_NOFOLLOW fails, it's a symlink
+    struct stat symlinkCheck;
+    if (stat(filename.c_str(), &symlinkCheck) == 0) {
+        int testFd = open(filename.c_str(), O_RDONLY | O_NOFOLLOW);
+        if (testFd == -1) {
+            m_Logger.warn() << "Symlink rejected in upload for security: " << filename;
+            return false;
+        }
+        close(testFd);
+    }
+
     std::ofstream outFile(filename.c_str(), std::ios::binary);
     if (outFile.is_open()) {
-        outFile << body;
+        outFile.write(body.c_str(), static_cast<std::streamsize>(body.size()));
         outFile.close();
         fileSize = body.length();
         m_Logger.info() << "Small file uploaded successfully: " << filename << " (" << fileSize
@@ -332,7 +554,8 @@ bool HttpServer::processRegularFileUpload(const HttpRequest& request, const std:
 // Helper method to handle file upload logic
 HttpResponse HttpServer::handleFileUpload(const HttpRequest& request, const Config::Server& server,
                                           const std::string& requestPath) {
-    if (requestPath != "/upload") {
+    // Accept any path starting with /upload (e.g., /upload, /upload_small, /upload_large)
+    if (requestPath.find("/upload") != 0) {
         // Default POST response for non-upload requests
         HttpResponse response(HTTP_OK, m_Logger);
         response.setHeader("Content-Type", "text/plain");
@@ -348,14 +571,42 @@ HttpResponse HttpServer::handleFileUpload(const HttpRequest& request, const Conf
         return createErrorResponse(HTTP_BAD_REQUEST, server);
     }
 
+    // Get documentRoot from config for this location
+    const Config::Location* location = findMatchingLocation(server, requestPath);
+    std::string documentRoot = determinePOSTDocumentRoot(location, server);
+
+    // Try to extract original filename from multipart data
+    std::string originalFilename;
+    std::string contentType = request.getHeader("Content-Type");
+    if (contentType.find("multipart/form-data") != std::string::npos) {
+        if (isLargeUpload) {
+            // For large uploads, filename was extracted during streaming by UploadManager
+            originalFilename = request.getOriginalFilename();
+        } else {
+            // For small uploads, extract from body in memory
+            std::string boundary = extractBoundaryFromContentType(contentType);
+            if (!boundary.empty()) {
+                originalFilename = extractFilenameFromMultipart(request.getBody(), boundary);
+            }
+        }
+    }
+
     // Generate final filename
     std::ostringstream  oss;
     static unsigned int uploadCounter = 0;
-    oss << "./html/uploaded_" << ++uploadCounter;
-    if (isLargeUpload) {
-        oss << "_large.bin";  // Use binary extension for large files
+    ++uploadCounter;
+
+    if (!originalFilename.empty()) {
+        // Use original filename (already sanitized)
+        oss << documentRoot << "/upload/" << originalFilename;
     } else {
-        oss << ".txt";
+        // Fallback to generated name
+        oss << documentRoot << "/upload/uploaded_" << uploadCounter;
+        if (isLargeUpload) {
+            oss << ".bin";
+        } else {
+            oss << ".txt";
+        }
     }
     std::string filename = oss.str();
 
@@ -384,6 +635,87 @@ HttpResponse HttpServer::handleFileUpload(const HttpRequest& request, const Conf
 
     m_Logger.error() << "Failed to save uploaded file: " << filename;
     return createErrorResponse(HTTP_INTERNAL_ERROR, server);
+}
+
+HttpResponse HttpServer::handlePUT(const HttpRequest& request, const Config::Server& server) {
+    const std::string& requestPath = request.getPath();
+
+    m_Logger.info() << "PUT request to " << requestPath;
+
+    if (!isPathSafe(requestPath)) {
+        m_Logger.warn() << "Unsafe path detected in PUT: " << requestPath;
+        return createErrorResponse(HTTP_FORBIDDEN, server);
+    }
+
+    // Find matching location for this request
+    const Config::Location* location = findMatchingLocation(server, requestPath);
+
+    // Check if method is allowed for this location
+    if ((location != 0) && !isMethodAllowed("PUT", *location)) {
+        m_Logger.warn() << "PUT method not allowed for path: " << requestPath;
+        return createErrorResponse(HTTP_METHOD_NOT_ALLOWED, server);
+    }
+
+    // Determine document root
+    std::string documentRoot;
+    if ((location != 0) && !location->root.empty()) {
+        documentRoot = location->root;
+    } else {
+        documentRoot = server.root;
+    }
+
+    if (documentRoot.empty()) {
+        documentRoot = "./html";
+    }
+
+    // Construct file path - remove location prefix from request path if applicable
+    std::string relativePath = requestPath;
+    if (location != 0 && !location->path.empty() && location->path != "/") {
+        // Remove location path prefix from request path
+        if (requestPath.find(location->path) == 0) {
+            relativePath = requestPath.substr(location->path.length());
+            if (relativePath.empty()) {
+                relativePath = "/";
+            }
+        }
+    }
+
+    std::string filePath = documentRoot + relativePath;
+
+    // Security: Check if destination is a symlink (reject if so)
+    // If file exists (stat succeeds) but open with O_NOFOLLOW fails, it's a symlink
+    struct stat symlinkCheck;
+    if (stat(filePath.c_str(), &symlinkCheck) == 0) {
+        int testFd = open(filePath.c_str(), O_RDONLY | O_NOFOLLOW);
+        if (testFd == -1) {
+            m_Logger.warn() << "Symlink rejected in PUT for security: " << filePath;
+            return createErrorResponse(HTTP_FORBIDDEN, server);
+        }
+        close(testFd);
+    }
+
+    // Write the request body to the file
+    std::ofstream outFile(filePath.c_str(), std::ios::binary | std::ios::trunc);
+    if (!outFile) {
+        m_Logger.error() << "Failed to open file for writing: " << filePath;
+        return createErrorResponse(HTTP_INTERNAL_ERROR, server);
+    }
+
+    const std::string& body = request.getBody();
+    outFile.write(body.c_str(), body.length());
+    outFile.close();
+
+    if (!outFile.good()) {
+        m_Logger.error() << "Failed to write to file: " << filePath;
+        return createErrorResponse(HTTP_INTERNAL_ERROR, server);
+    }
+
+    m_Logger.info() << "File saved successfully: " << filePath << " (" << body.length() << " bytes)";
+
+    HttpResponse response(HTTP_CREATED, m_Logger);
+    response.setHeader("Content-Type", "text/html");
+    response.setBody("<h1>Upload Successful!</h1><p>File saved: " + requestPath + "</p>");
+    return response;
 }
 
 HttpResponse HttpServer::handleDELETE(const HttpRequest& request, const Config::Server& server) {
@@ -417,16 +749,27 @@ HttpResponse HttpServer::handleDELETE(const HttpRequest& request, const Config::
         documentRoot = "./html";
     }
 
-    // Construct file path
+    // Construct file path - nginx-style: root + full URL path
     std::string filePath = documentRoot + requestPath;
 
+    // Security: Check if path is a symlink (reject if so)
+    // If file exists (stat succeeds) but open with O_NOFOLLOW fails, it's a symlink
     struct stat fileStat;
     if (stat(filePath.c_str(), &fileStat) != 0) {
         return createErrorResponse(HTTP_NOT_FOUND, server);
     }
 
+    // Symlink check: stat succeeded, now try open with O_NOFOLLOW
+    int testFd = open(filePath.c_str(), O_RDONLY | O_NOFOLLOW);
+    if (testFd == -1) {
+        // File exists (stat passed) but can't open with O_NOFOLLOW = symlink
+        m_Logger.warn() << "Symlink rejected in DELETE for security: " << filePath;
+        return createErrorResponse(HTTP_FORBIDDEN, server);
+    }
+    close(testFd);
+
     if (S_ISREG(fileStat.st_mode)) {
-        if (unlink(filePath.c_str()) == 0) {
+        if (std::remove(filePath.c_str()) == 0) {
             m_Logger.info() << "File deleted successfully: " << filePath;
 
             HttpResponse response(HTTP_OK, m_Logger);
@@ -458,8 +801,19 @@ HttpResponse HttpServer::handleHEAD(const HttpRequest& request, const Config::Se
     std::string indexFile;
     std::string documentRoot = determineHEADDocumentRoot(location, server, indexFile);
 
+    // Remove location prefix from request path if applicable
+    std::string relativePath = requestPath;
+    if (location != 0 && !location->path.empty() && location->path != "/") {
+        if (requestPath.find(location->path) == 0) {
+            relativePath = requestPath.substr(location->path.length());
+            if (relativePath.empty()) {
+                relativePath = "/";
+            }
+        }
+    }
+
     // Construct and validate file path
-    std::string filePath = constructHEADFilePath(documentRoot, requestPath, indexFile);
+    std::string filePath = constructHEADFilePath(documentRoot, relativePath, indexFile);
     if (filePath.empty()) {
         return createErrorResponse(HTTP_URI_TOO_LONG, server);
     }
@@ -610,32 +964,31 @@ std::string HttpServer::determineContentTypeFromPath(const std::string& filePath
 
 HttpResponse HttpServer::serveStaticFile(const std::string&    filePath,
                                          const Config::Server& server) {
-    // Security check: Detect and reject symbolic links
-    struct stat linkStat;
-    if (stat(filePath.c_str(), &linkStat) != 0) {
-        return createErrorResponse(HTTP_NOT_FOUND, server);
-    }
-
-    if (S_ISLNK(linkStat.st_mode)) {
-        m_Logger.warn() << "Symbolic link rejected for security reasons: " << filePath;
-        return createErrorResponse(HTTP_FORBIDDEN, server);
-    }
-
-    // Check if file exists and get stats (using stat for regular files)
+    // Check if file exists and get stats first
     struct stat fileStat;
     if (stat(filePath.c_str(), &fileStat) != 0) {
         return createErrorResponse(HTTP_NOT_FOUND, server);
     }
 
-    // Verify it's a regular file
-    if (!S_ISREG(fileStat.st_mode)) {
-        m_Logger.warn() << "Not a regular file: " << filePath;
+    // Security check: Detect and reject symbolic links using O_NOFOLLOW
+    // If stat succeeded but open with O_NOFOLLOW fails, it's a symlink
+    int testFd = open(filePath.c_str(), O_RDONLY | O_NOFOLLOW);
+    if (testFd == -1) {
+        // File exists (stat passed) but can't open with O_NOFOLLOW = symlink or permission issue
+        m_Logger.warn() << "Symbolic link or permission denied for security: " << filePath;
         return createErrorResponse(HTTP_FORBIDDEN, server);
     }
+    close(testFd);
 
     // Check read permissions
     if (access(filePath.c_str(), R_OK) != 0) {
         m_Logger.warn() << "No read permission for file: " << filePath;
+        return createErrorResponse(HTTP_FORBIDDEN, server);
+    }
+
+    // Verify it's a regular file
+    if (!S_ISREG(fileStat.st_mode)) {
+        m_Logger.warn() << "Not a regular file: " << filePath;
         return createErrorResponse(HTTP_FORBIDDEN, server);
     }
 
@@ -905,9 +1258,26 @@ const Config::Location* HttpServer::findMatchingLocation(const Config::Server& s
 
             const std::string& locationPath = location.path;
 
-            if (path.find(locationPath) == 0 && locationPath.length() > bestMatchLength) {
-                bestMatch = &location;
-                bestMatchLength = locationPath.length();
+            // Check if path starts with locationPath
+            if (path.find(locationPath) == 0) {
+                // Verify this is a valid directory match
+                bool isValidMatch = false;
+
+                if (locationPath == "/") {
+                    // Root location matches everything
+                    isValidMatch = true;
+                } else if (path.length() == locationPath.length()) {
+                    // Exact match (e.g., /upload == /upload)
+                    isValidMatch = true;
+                } else if (path[locationPath.length()] == '/') {
+                    // Directory match (e.g., /upload/file matches /upload)
+                    isValidMatch = true;
+                }
+
+                if (isValidMatch && locationPath.length() > bestMatchLength) {
+                    bestMatch = &location;
+                    bestMatchLength = locationPath.length();
+                }
             }
         }
 
@@ -954,7 +1324,8 @@ bool HttpServer::isCGIFile(const std::string& filePath) {
     }
 
     std::string extension = filePath.substr(dotPos);
-    return (extension == ".php" || extension == ".py" || extension == ".cgi" || extension == ".pl");
+    return (extension == ".php" || extension == ".py" || extension == ".cgi" || extension == ".pl" ||
+            extension == ".bla");
 }
 
 std::string HttpServer::resolvePath(const std::string&      requestPath,
@@ -1025,20 +1396,106 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
                                    const std::string& filePath) {
     (void)server;  // Suppress unused parameter warning for now
 
+    // Static counter for unique temp file names (time() is not allowed)
+    static int tempFileCounter = 0;
+    tempFileCounter++;
+
     m_Logger.info() << "CGI request to " << filePath;
 
     // Determine CGI interpreter based on file extension
     std::string interpreter;
     if (filePath.find(".php") != std::string::npos) {
-        interpreter = "php-cgi";
+        interpreter = "/usr/bin/php-cgi";
     } else if (filePath.find(".py") != std::string::npos) {
-        interpreter = "python3";
+        interpreter = "/usr/bin/python3";
     } else if (filePath.find(".pl") != std::string::npos) {
-        interpreter = "perl";
+        interpreter = "/usr/bin/perl";
+    } else if (filePath.find(".bla") != std::string::npos) {
+        interpreter = "./cgi_test";
     } else {
         // For .cgi files, execute directly
         interpreter = "";
     }
+
+    // Prepare request body info BEFORE fork()
+    // For large uploads, we DON'T read into memory (would be 1GB+!)
+    // Instead, we'll redirect stdin from the temp file in the child process
+    std::string requestBody;
+    std::string tempFilePath;
+    size_t      contentLength = 0;
+    bool        hasLargeUpload = false;
+
+    if (request.getMethod() == "POST") {
+        if (request.hasLargeUpload()) {
+            // Large upload - get temp file path but DON'T read into memory
+            hasLargeUpload = true;
+            tempFilePath = request.getTempFilePath();
+
+            // Get file size for CONTENT_LENGTH
+            struct stat fileStat;
+            if (stat(tempFilePath.c_str(), &fileStat) == 0) {
+                contentLength = fileStat.st_size;
+            }
+
+            m_Logger.info() << "CGI large upload: " << contentLength
+                           << " bytes from temp file: " << tempFilePath;
+        } else {
+            // Small/medium upload - read into memory
+            requestBody = request.getBody();
+            contentLength = requestBody.length();
+
+            // If body is large (>=1MB) but came via chunked encoding (no streaming):
+            // Create temp file on-the-fly to avoid pipe deadlock
+            if (contentLength >= LARGE_FILE_THRESHOLD) {
+                m_Logger.info() << "CGI large body (" << contentLength
+                               << " bytes) without temp file - creating temp file for pipe safety";
+
+                // Generate unique temp file name
+                std::ostringstream tempNameStream;
+                tempNameStream << "./html/.cgi_temp_" << getpid() << "_" << tempFileCounter;
+                tempFilePath = tempNameStream.str();
+
+                // Write body to temp file
+                int tempFd = open(tempFilePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+                if (tempFd == -1) {
+                    m_Logger.error() << "Failed to create temp file for large CGI body: "
+                                     << tempFilePath;
+                    return createErrorResponse(HTTP_INTERNAL_ERROR, server);
+                }
+
+                ssize_t written = write(tempFd, requestBody.c_str(), requestBody.length());
+                close(tempFd);
+
+                if (written != static_cast<ssize_t>(requestBody.length())) {
+                    m_Logger.error() << "Failed to write body to temp file";
+                    std::remove(tempFilePath.c_str());
+                    return createErrorResponse(HTTP_INTERNAL_ERROR, server);
+                }
+
+                hasLargeUpload = true;
+                requestBody.clear();  // Free memory since we now have it on disk
+
+                m_Logger.info() << "CGI large body written to temp file: " << tempFilePath;
+            }
+        }
+    }
+
+    // Calculate PATH_INFO BEFORE fork() to avoid using object methods in child
+    std::string path = request.getPath();
+    std::string queryString;
+    size_t      queryPos = path.find('?');
+    if (queryPos != std::string::npos) {
+        queryString = path.substr(queryPos + 1);
+        path = path.substr(0, queryPos);
+    }
+
+    // PATH_INFO and SCRIPT_NAME for CGI
+    // ubuntu_cgi_tester expects SCRIPT_NAME to be empty and PATH_INFO to contain the full request path
+    // For /directory/youpi.bla -> SCRIPT_NAME="" and PATH_INFO="/directory/youpi.bla"
+    std::string pathInfo = path;           // Full request path
+    std::string scriptName = "";           // Empty for ubuntu_cgi_tester compatibility
+
+    m_Logger.info() << "CGI PATH_INFO='" << pathInfo << "' SCRIPT_NAME='" << scriptName << "'";
 
     // Create pipes for CGI communication
     int stdinPipe[2];
@@ -1063,43 +1520,56 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
     if (pid == 0) {
         // Child process - execute CGI script
 
-        // Set up pipes
-        dup2(stdinPipe[0], STDIN_FILENO);
+        // Set up stdin: either from temp file (large upload) or from pipe (small)
+        if (hasLargeUpload && !tempFilePath.empty()) {
+            // Large upload: redirect stdin from temp file (disk files are exempt from poll())
+            int tempFd = open(tempFilePath.c_str(), O_RDONLY);
+            if (tempFd == -1) {
+                _exit(1);  // Failed to open temp file
+            }
+            dup2(tempFd, STDIN_FILENO);
+            close(tempFd);
+            // Close stdin pipe (not needed)
+            close(stdinPipe[0]);
+            close(stdinPipe[1]);
+        } else {
+            // Small upload: use pipe as before
+            dup2(stdinPipe[0], STDIN_FILENO);
+            close(stdinPipe[1]);
+            close(stdinPipe[0]);
+        }
+
+        // Set up stdout/stderr
         dup2(stdoutPipe[1], STDOUT_FILENO);
         dup2(stdoutPipe[1], STDERR_FILENO);
-
-        // Close unused pipe ends
-        close(stdinPipe[1]);
         close(stdoutPipe[0]);
-        close(stdinPipe[0]);
         close(stdoutPipe[1]);
 
         // Set environment variables according to CGI standard
+        // Use pre-calculated values from before fork()
         setenv("REQUEST_METHOD", request.getMethod().c_str(), 1);
-
-        // Extract query string from path (everything after '?')
-        std::string path = request.getPath();
-        std::string queryString;
-        size_t      queryPos = path.find('?');
-        if (queryPos != std::string::npos) {
-            queryString = path.substr(queryPos + 1);
-            path = path.substr(0, queryPos);
-        }
         setenv("QUERY_STRING", queryString.c_str(), 1);
-        setenv("PATH_INFO", path.c_str(), 1);
+        setenv("PATH_INFO", pathInfo.c_str(), 1);
+        setenv("SCRIPT_NAME", scriptName.c_str(), 1);
+        setenv("SERVER_PROTOCOL", request.getVersion().c_str(), 1);
 
         // Content-related variables
         std::ostringstream contentLengthStream;
-        contentLengthStream << request.getBody().length();
-        std::string contentLength = contentLengthStream.str();
-        setenv("CONTENT_LENGTH", contentLength.c_str(), 1);
+        contentLengthStream << contentLength;
+        std::string contentLengthStr = contentLengthStream.str();
+        setenv("CONTENT_LENGTH", contentLengthStr.c_str(), 1);
         setenv("CONTENT_TYPE", request.getHeader("Content-Type").c_str(), 1);
-
-        // Server variables
-        setenv("SCRIPT_NAME", path.c_str(), 1);
         setenv("SERVER_SOFTWARE", "webserv/1.0", 1);
         setenv("SERVER_NAME", "localhost", 1);
-        setenv("SERVER_PORT", "8080", 1);
+
+        // Get actual server port
+        std::ostringstream portStream;
+        if (!server.listens.empty()) {
+            portStream << server.listens[0].second;
+        } else {
+            portStream << "8080";  // fallback
+        }
+        setenv("SERVER_PORT", portStream.str().c_str(), 1);
 
         // HTTP headers as environment variables
         setenv("HTTP_HOST", request.getHeader("Host").c_str(), 1);
@@ -1109,14 +1579,12 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
         if (interpreter.empty()) {
             // Execute script directly (for .cgi files)
             char* argv[] = {const_cast<char*>(filePath.c_str()), NULL};
-            char* envp[] = {NULL};  // Basic environment
-            execve(filePath.c_str(), argv, envp);
+            execve(filePath.c_str(), argv, environ);
         } else {
-            // Execute with interpreter (for .php, .py, .pl files)
+            // Execute with interpreter (for .php, .py, .pl, .bla files)
             char* argv[] = {const_cast<char*>(interpreter.c_str()),
                             const_cast<char*>(filePath.c_str()), NULL};
-            char* envp[] = {NULL};  // Basic environment
-            execve(interpreter.c_str(), argv, envp);
+            execve(interpreter.c_str(), argv, environ);
         }
 
         // If execve fails
@@ -1128,20 +1596,56 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
         close(stdinPipe[0]);
         close(stdoutPipe[1]);
 
-        // Send request body to CGI if needed (for POST)
-        if (request.getMethod() == "POST" && !request.getBody().empty()) {
-            write(stdinPipe[1], request.getBody().c_str(), request.getBody().length());
+        // Send request body to CGI if needed (for POST with small body)
+        // For large uploads, child reads directly from temp file (stdin already redirected)
+        if (!hasLargeUpload && !requestBody.empty()) {
+            write(stdinPipe[1], requestBody.c_str(), requestBody.length());
         }
         close(stdinPipe[1]);
 
-        // Read CGI output
+        // Read CGI output - use temp file for large outputs to avoid memory issues
         std::string cgiOutput;
+        std::string cgiOutputFile;
+        int         outputFd = -1;
+        size_t      totalOutputSize = 0;
         char        buffer[CGI_BUFFER_SIZE];
         ssize_t     bytesRead;
 
-        while ((bytesRead = read(stdoutPipe[0], buffer, sizeof(buffer) - 1)) > 0) {
-            buffer[bytesRead] = '\0';
-            cgiOutput += buffer;
+        while ((bytesRead = read(stdoutPipe[0], buffer, sizeof(buffer))) > 0) {
+            totalOutputSize += bytesRead;
+
+            // If output becomes large (>1MB) and we haven't created temp file yet, create it
+            if (totalOutputSize > LARGE_FILE_THRESHOLD && outputFd == -1) {
+                // Switch to temp file mode
+                std::ostringstream tempNameStream;
+                tempNameStream << "./html/.cgi_output_" << getpid() << "_" << tempFileCounter;
+                cgiOutputFile = tempNameStream.str();
+
+                outputFd = open(cgiOutputFile.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+                if (outputFd == -1) {
+                    m_Logger.error() << "Failed to create temp file for CGI output: " << cgiOutputFile;
+                    // Continue with in-memory storage
+                } else {
+                    m_Logger.info() << "CGI output large (" << totalOutputSize
+                                   << " bytes) - writing to temp file: " << cgiOutputFile;
+                    // Write accumulated data to file
+                    if (!cgiOutput.empty()) {
+                        write(outputFd, cgiOutput.c_str(), cgiOutput.length());
+                        cgiOutput.clear();  // Free memory
+                    }
+                }
+            }
+
+            // Write to temp file or accumulate in memory
+            if (outputFd != -1) {
+                write(outputFd, buffer, bytesRead);
+            } else {
+                cgiOutput.append(buffer, bytesRead);
+            }
+        }
+
+        if (outputFd != -1) {
+            close(outputFd);
         }
         close(stdoutPipe[0]);
 
@@ -1149,17 +1653,106 @@ HttpResponse HttpServer::handleCGI(const HttpRequest& request, const Config::Ser
         int status;
         waitpid(pid, &status, 0);
 
+        // Cleanup temp file if we created one on-the-fly (for chunked large bodies)
+        if (!tempFilePath.empty() && tempFilePath.find(".cgi_temp_") != std::string::npos) {
+            if (std::remove(tempFilePath.c_str()) == 0) {
+                m_Logger.info() << "Cleaned up CGI temp file: " << tempFilePath;
+            } else {
+                m_Logger.warn() << "Failed to cleanup CGI temp file: " << tempFilePath;
+            }
+        }
+
         if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
             // CGI executed successfully
-            m_Logger.info() << "CGI executed successfully, output size: " << cgiOutput.length();
+            m_Logger.info() << "CGI executed successfully, output size: " << totalOutputSize;
 
+            // Parse CGI output to separate headers from body
+            std::string cgiHeaders;
+            std::string cgiBody;
+            std::string fullOutput;
+
+            // Get the full CGI output (from file or memory)
+            if (!cgiOutputFile.empty()) {
+                // Read from temp file
+                std::ifstream file(cgiOutputFile.c_str(), std::ios::binary);
+                if (!file.good()) {
+                    m_Logger.error() << "Failed to read CGI output file: " << cgiOutputFile;
+                    std::remove(cgiOutputFile.c_str());
+                    return createErrorResponse(HTTP_INTERNAL_ERROR, server);
+                }
+                std::ostringstream buffer;
+                buffer << file.rdbuf();
+                fullOutput = buffer.str();
+                file.close();
+                std::remove(cgiOutputFile.c_str());
+                m_Logger.info() << "Read and cleaned up CGI output temp file: " << cgiOutputFile;
+            } else {
+                fullOutput = cgiOutput;
+            }
+
+            // Parse CGI headers (format: "Header: value\r\n...\r\n\r\nbody")
+            size_t headerEnd = fullOutput.find("\r\n\r\n");
+            if (headerEnd != std::string::npos) {
+                cgiHeaders = fullOutput.substr(0, headerEnd);
+                cgiBody = fullOutput.substr(headerEnd + 4);  // Skip \r\n\r\n
+                m_Logger.info() << "Parsed CGI output: " << cgiHeaders.length()
+                               << " bytes headers, " << cgiBody.length() << " bytes body";
+            } else {
+                // No CGI headers found, treat entire output as body
+                cgiBody = fullOutput;
+                m_Logger.warn() << "No CGI headers found in output, using entire output as body";
+            }
+
+            // Create HTTP response with parsed CGI headers
             HttpResponse response(HTTP_OK, m_Logger);
-            response.setHeader("Content-Type", "text/html");
-            response.setBody(cgiOutput);
+
+            // Parse and apply CGI headers
+            if (!cgiHeaders.empty()) {
+                std::istringstream headerStream(cgiHeaders);
+                std::string line;
+                while (std::getline(headerStream, line)) {
+                    // Remove \r if present
+                    if (!line.empty() && line[line.length() - 1] == '\r') {
+                        line = line.substr(0, line.length() - 1);
+                    }
+
+                    size_t colonPos = line.find(':');
+                    if (colonPos != std::string::npos) {
+                        std::string headerName = line.substr(0, colonPos);
+                        std::string headerValue = line.substr(colonPos + 1);
+
+                        // Trim leading/trailing whitespace from value
+                        size_t start = headerValue.find_first_not_of(" \t");
+                        if (start != std::string::npos) {
+                            headerValue = headerValue.substr(start);
+                        }
+                        size_t end = headerValue.find_last_not_of(" \t\r\n");
+                        if (end != std::string::npos) {
+                            headerValue = headerValue.substr(0, end + 1);
+                        }
+
+                        // Apply header (skip Status as it's handled separately)
+                        if (headerName != "Status") {
+                            response.setHeader(headerName, headerValue);
+                            m_Logger.info() << "CGI header: " << headerName << ": " << headerValue;
+                        }
+                    }
+                }
+            } else {
+                // Default Content-Type if no CGI headers
+                response.setHeader("Content-Type", "text/html");
+            }
+
+            // Set the body (without CGI headers)
+            response.setBody(cgiBody);
             return response;
         }
 
         // CGI execution failed
+        // Clean up output temp file if created
+        if (!cgiOutputFile.empty()) {
+            std::remove(cgiOutputFile.c_str());
+        }
         m_Logger.error() << "CGI execution failed with status: " << WEXITSTATUS(status);
         return createErrorResponse(HTTP_INTERNAL_ERROR, server);
     }
@@ -1196,11 +1789,8 @@ HttpResponse HttpServer::createErrorResponse(int statusCode, const Config::Serve
     switch (statusCode) {
         case HTTP_BAD_REQUEST:
             return HttpResponse::createBadRequest();
-        case HTTP_FORBIDDEN: {
-            HttpResponse response = HttpResponse::createBadRequest();
-            response.setStatus(HTTP_FORBIDDEN, "Forbidden");
-            return response;
-        }
+        case HTTP_FORBIDDEN:
+            return HttpResponse::createForbidden();
         case HTTP_NOT_FOUND:
             return HttpResponse::createNotFound();
         case HTTP_METHOD_NOT_ALLOWED:
