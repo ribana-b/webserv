@@ -276,6 +276,7 @@ def main():
     print(f"\n{Colors.YELLOW}=== Large POST Tests ==={Colors.RESET}")
     test_post('/directory/youpi.bla', 100000000, use_chunked=True)
     test_post('/directory/youpla.bla', 100000000, expect_status=404, use_chunked=True)
+    time.sleep(0.5)  # Allow server to clean up after large transfers
     test_post('/directory/youpi.bla', 100000, special_headers={'X-Special': 'test'})
 
     # POST body size tests
