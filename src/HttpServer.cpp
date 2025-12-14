@@ -22,7 +22,6 @@
 
 #include <algorithm>  // For std::sort
 #include <cstdio>     // For std::remove
-#include <cerrno>     // For errno
 #include <cstring>    // For strerror
 #include <fstream>    // For std::ofstream
 #include <iostream>   // For std::cout
@@ -326,6 +325,18 @@ bool HttpServer::processLargeFileUpload(const HttpRequest& request, const std::s
     }
     tempCheck.close();
 
+    // Security: Check if destination is a symlink (reject if so)
+    // If file exists (stat succeeds) but open with O_NOFOLLOW fails, it's a symlink
+    struct stat symlinkCheck;
+    if (stat(filename.c_str(), &symlinkCheck) == 0) {
+        int testFd = open(filename.c_str(), O_RDONLY | O_NOFOLLOW);
+        if (testFd == -1) {
+            m_Logger.warn() << "Symlink rejected in large upload for security: " << filename;
+            return false;
+        }
+        close(testFd);
+    }
+
     // Copy file using C++ streams (rename not in allowed functions)
     std::ifstream source(request.getTempFilePath().c_str(), std::ios::binary);
     if (source.is_open()) {
@@ -516,6 +527,18 @@ bool HttpServer::processRegularFileUpload(const HttpRequest& request, const std:
         }
     }
 
+    // Security: Check if destination is a symlink (reject if so)
+    // If file exists (stat succeeds) but open with O_NOFOLLOW fails, it's a symlink
+    struct stat symlinkCheck;
+    if (stat(filename.c_str(), &symlinkCheck) == 0) {
+        int testFd = open(filename.c_str(), O_RDONLY | O_NOFOLLOW);
+        if (testFd == -1) {
+            m_Logger.warn() << "Symlink rejected in upload for security: " << filename;
+            return false;
+        }
+        close(testFd);
+    }
+
     std::ofstream outFile(filename.c_str(), std::ios::binary);
     if (outFile.is_open()) {
         outFile.write(body.c_str(), static_cast<std::streamsize>(body.size()));
@@ -659,6 +682,18 @@ HttpResponse HttpServer::handlePUT(const HttpRequest& request, const Config::Ser
 
     std::string filePath = documentRoot + relativePath;
 
+    // Security: Check if destination is a symlink (reject if so)
+    // If file exists (stat succeeds) but open with O_NOFOLLOW fails, it's a symlink
+    struct stat symlinkCheck;
+    if (stat(filePath.c_str(), &symlinkCheck) == 0) {
+        int testFd = open(filePath.c_str(), O_RDONLY | O_NOFOLLOW);
+        if (testFd == -1) {
+            m_Logger.warn() << "Symlink rejected in PUT for security: " << filePath;
+            return createErrorResponse(HTTP_FORBIDDEN, server);
+        }
+        close(testFd);
+    }
+
     // Write the request body to the file
     std::ofstream outFile(filePath.c_str(), std::ios::binary | std::ios::trunc);
     if (!outFile) {
@@ -717,10 +752,21 @@ HttpResponse HttpServer::handleDELETE(const HttpRequest& request, const Config::
     // Construct file path - nginx-style: root + full URL path
     std::string filePath = documentRoot + requestPath;
 
+    // Security: Check if path is a symlink (reject if so)
+    // If file exists (stat succeeds) but open with O_NOFOLLOW fails, it's a symlink
     struct stat fileStat;
     if (stat(filePath.c_str(), &fileStat) != 0) {
         return createErrorResponse(HTTP_NOT_FOUND, server);
     }
+
+    // Symlink check: stat succeeded, now try open with O_NOFOLLOW
+    int testFd = open(filePath.c_str(), O_RDONLY | O_NOFOLLOW);
+    if (testFd == -1) {
+        // File exists (stat passed) but can't open with O_NOFOLLOW = symlink
+        m_Logger.warn() << "Symlink rejected in DELETE for security: " << filePath;
+        return createErrorResponse(HTTP_FORBIDDEN, server);
+    }
+    close(testFd);
 
     if (S_ISREG(fileStat.st_mode)) {
         if (std::remove(filePath.c_str()) == 0) {
@@ -918,39 +964,31 @@ std::string HttpServer::determineContentTypeFromPath(const std::string& filePath
 
 HttpResponse HttpServer::serveStaticFile(const std::string&    filePath,
                                          const Config::Server& server) {
-    // Security check: Detect and reject symbolic links using O_NOFOLLOW
-    int testFd = open(filePath.c_str(), O_RDONLY | O_NOFOLLOW);
-    if (testFd == -1) {
-        // Check if it failed because it's a symlink
-        if (errno == ELOOP) {
-            m_Logger.warn() << "Symbolic link rejected for security reasons: " << filePath;
-            return createErrorResponse(HTTP_FORBIDDEN, server);
-        }
-        // Check if it failed because of permission denied
-        if (errno == EACCES) {
-            m_Logger.warn() << "No read permission for file: " << filePath;
-            return createErrorResponse(HTTP_FORBIDDEN, server);
-        }
-        // Other error (file doesn't exist, etc.)
-        return createErrorResponse(HTTP_NOT_FOUND, server);
-    }
-    close(testFd);
-
-    // Check if file exists and get stats
+    // Check if file exists and get stats first
     struct stat fileStat;
     if (stat(filePath.c_str(), &fileStat) != 0) {
         return createErrorResponse(HTTP_NOT_FOUND, server);
     }
 
-    // Verify it's a regular file
-    if (!S_ISREG(fileStat.st_mode)) {
-        m_Logger.warn() << "Not a regular file: " << filePath;
+    // Security check: Detect and reject symbolic links using O_NOFOLLOW
+    // If stat succeeded but open with O_NOFOLLOW fails, it's a symlink
+    int testFd = open(filePath.c_str(), O_RDONLY | O_NOFOLLOW);
+    if (testFd == -1) {
+        // File exists (stat passed) but can't open with O_NOFOLLOW = symlink or permission issue
+        m_Logger.warn() << "Symbolic link or permission denied for security: " << filePath;
         return createErrorResponse(HTTP_FORBIDDEN, server);
     }
+    close(testFd);
 
     // Check read permissions
     if (access(filePath.c_str(), R_OK) != 0) {
         m_Logger.warn() << "No read permission for file: " << filePath;
+        return createErrorResponse(HTTP_FORBIDDEN, server);
+    }
+
+    // Verify it's a regular file
+    if (!S_ISREG(fileStat.st_mode)) {
+        m_Logger.warn() << "Not a regular file: " << filePath;
         return createErrorResponse(HTTP_FORBIDDEN, server);
     }
 
